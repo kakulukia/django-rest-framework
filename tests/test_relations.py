@@ -1,149 +1,324 @@
-"""
-General tests for relational fields.
-"""
-from __future__ import unicode_literals
-from django import get_version
-from django.db import models
-from django.test import TestCase
-from django.utils import unittest
-from rest_framework import serializers
-from tests.models import BlogPost
+import uuid
+
+import pytest
+from _pytest.monkeypatch import MonkeyPatch
+from django.conf.urls import url
+from django.core.exceptions import ImproperlyConfigured
+from django.test import override_settings
+from django.utils.datastructures import MultiValueDict
+
+from rest_framework import relations, serializers
+from rest_framework.fields import empty
+from rest_framework.test import APISimpleTestCase
+
+from .utils import (
+    BadType, MockObject, MockQueryset, fail_reverse, mock_reverse
+)
 
 
-class NullModel(models.Model):
-    pass
+class TestStringRelatedField(APISimpleTestCase):
+    def setUp(self):
+        self.instance = MockObject(pk=1, name='foo')
+        self.field = serializers.StringRelatedField()
+
+    def test_string_related_representation(self):
+        representation = self.field.to_representation(self.instance)
+        assert representation == '<MockObject name=foo, pk=1>'
 
 
-class FieldTests(TestCase):
-    def test_pk_related_field_with_empty_string(self):
-        """
-        Regression test for #446
-
-        https://github.com/tomchristie/django-rest-framework/issues/446
-        """
-        field = serializers.PrimaryKeyRelatedField(queryset=NullModel.objects.all())
-        self.assertRaises(serializers.ValidationError, field.from_native, '')
-        self.assertRaises(serializers.ValidationError, field.from_native, [])
-
-    def test_hyperlinked_related_field_with_empty_string(self):
-        field = serializers.HyperlinkedRelatedField(queryset=NullModel.objects.all(), view_name='')
-        self.assertRaises(serializers.ValidationError, field.from_native, '')
-        self.assertRaises(serializers.ValidationError, field.from_native, [])
-
-    def test_slug_related_field_with_empty_string(self):
-        field = serializers.SlugRelatedField(queryset=NullModel.objects.all(), slug_field='pk')
-        self.assertRaises(serializers.ValidationError, field.from_native, '')
-        self.assertRaises(serializers.ValidationError, field.from_native, [])
+class MockApiSettings(object):
+    def __init__(self, cutoff, cutoff_text):
+        self.HTML_SELECT_CUTOFF = cutoff
+        self.HTML_SELECT_CUTOFF_TEXT = cutoff_text
 
 
-class TestManyRelatedMixin(TestCase):
-    def test_missing_many_to_many_related_field(self):
-        '''
-        Regression test for #632
+class TestRelatedFieldHTMLCutoff(APISimpleTestCase):
+    def setUp(self):
+        self.queryset = MockQueryset([
+            MockObject(pk=i, name=str(i)) for i in range(0, 1100)
+        ])
+        self.monkeypatch = MonkeyPatch()
 
-        https://github.com/tomchristie/django-rest-framework/pull/632
-        '''
-        field = serializers.RelatedField(many=True, read_only=False)
+    def test_no_settings(self):
+        # The default is 1,000, so sans settings it should be 1,000 plus one.
+        for many in (False, True):
+            field = serializers.PrimaryKeyRelatedField(queryset=self.queryset,
+                                                       many=many)
+            options = list(field.iter_options())
+            assert len(options) == 1001
+            assert options[-1].display_text == "More than 1000 items..."
 
-        into = {}
-        field.field_from_native({}, None, 'field_name', into)
-        self.assertEqual(into['field_name'], [])
+    def test_settings_cutoff(self):
+        self.monkeypatch.setattr(relations, "api_settings",
+                                 MockApiSettings(2, "Cut Off"))
+        for many in (False, True):
+            field = serializers.PrimaryKeyRelatedField(queryset=self.queryset,
+                                                       many=many)
+            options = list(field.iter_options())
+            assert len(options) == 3  # 2 real items plus the 'Cut Off' item.
+            assert options[-1].display_text == "Cut Off"
+
+    def test_settings_cutoff_none(self):
+        # Setting it to None should mean no limit; the default limit is 1,000.
+        self.monkeypatch.setattr(relations, "api_settings",
+                                 MockApiSettings(None, "Cut Off"))
+        for many in (False, True):
+            field = serializers.PrimaryKeyRelatedField(queryset=self.queryset,
+                                                       many=many)
+            options = list(field.iter_options())
+            assert len(options) == 1100
+
+    def test_settings_kwargs_cutoff(self):
+        # The explicit argument should override the settings.
+        self.monkeypatch.setattr(relations, "api_settings",
+                                 MockApiSettings(2, "Cut Off"))
+        for many in (False, True):
+            field = serializers.PrimaryKeyRelatedField(queryset=self.queryset,
+                                                       many=many,
+                                                       html_cutoff=100)
+            options = list(field.iter_options())
+            assert len(options) == 101
+            assert options[-1].display_text == "Cut Off"
 
 
-# Regression tests for #694 (`source` attribute on related fields)
+class TestPrimaryKeyRelatedField(APISimpleTestCase):
+    def setUp(self):
+        self.queryset = MockQueryset([
+            MockObject(pk=1, name='foo'),
+            MockObject(pk=2, name='bar'),
+            MockObject(pk=3, name='baz')
+        ])
+        self.instance = self.queryset.items[2]
+        self.field = serializers.PrimaryKeyRelatedField(queryset=self.queryset)
 
-class RelatedFieldSourceTests(TestCase):
-    def test_related_manager_source(self):
-        """
-        Relational fields should be able to use manager-returning methods as their source.
-        """
-        BlogPost.objects.create(title='blah')
-        field = serializers.RelatedField(many=True, source='get_blogposts_manager')
+    def test_pk_related_lookup_exists(self):
+        instance = self.field.to_internal_value(self.instance.pk)
+        assert instance is self.instance
 
-        class ClassWithManagerMethod(object):
-            def get_blogposts_manager(self):
-                return BlogPost.objects
+    def test_pk_related_lookup_does_not_exist(self):
+        with pytest.raises(serializers.ValidationError) as excinfo:
+            self.field.to_internal_value(4)
+        msg = excinfo.value.detail[0]
+        assert msg == 'Invalid pk "4" - object does not exist.'
 
-        obj = ClassWithManagerMethod()
-        value = field.field_to_native(obj, 'field_name')
-        self.assertEqual(value, ['BlogPost object'])
+    def test_pk_related_lookup_invalid_type(self):
+        with pytest.raises(serializers.ValidationError) as excinfo:
+            self.field.to_internal_value(BadType())
+        msg = excinfo.value.detail[0]
+        assert msg == 'Incorrect type. Expected pk value, received BadType.'
 
-    def test_related_queryset_source(self):
-        """
-        Relational fields should be able to use queryset-returning methods as their source.
-        """
-        BlogPost.objects.create(title='blah')
-        field = serializers.RelatedField(many=True, source='get_blogposts_queryset')
+    def test_pk_representation(self):
+        representation = self.field.to_representation(self.instance)
+        assert representation == self.instance.pk
 
-        class ClassWithQuerysetMethod(object):
-            def get_blogposts_queryset(self):
-                return BlogPost.objects.all()
+    def test_explicit_many_false(self):
+        field = serializers.PrimaryKeyRelatedField(queryset=self.queryset, many=False)
+        instance = field.to_internal_value(self.instance.pk)
+        assert instance is self.instance
 
-        obj = ClassWithQuerysetMethod()
-        value = field.field_to_native(obj, 'field_name')
-        self.assertEqual(value, ['BlogPost object'])
 
-    def test_dotted_source(self):
-        """
-        Source argument should support dotted.source notation.
-        """
-        BlogPost.objects.create(title='blah')
-        field = serializers.RelatedField(many=True, source='a.b.c')
-
-        class ClassWithQuerysetMethod(object):
-            a = {
-                'b': {
-                    'c': BlogPost.objects.all()
-                }
-            }
-
-        obj = ClassWithQuerysetMethod()
-        value = field.field_to_native(obj, 'field_name')
-        self.assertEqual(value, ['BlogPost object'])
-
-    # Regression for #1129
-    def test_exception_for_incorect_fk(self):
-        """
-        Check that the exception message are correct if the source field
-        doesn't exist.
-        """
-        from tests.models import ManyToManySource
-
-        class Meta:
-            model = ManyToManySource
-
-        attrs = {
-            'name': serializers.SlugRelatedField(
-                slug_field='name', source='banzai'),
-            'Meta': Meta,
-        }
-
-        TestSerializer = type(
-            str('TestSerializer'),
-            (serializers.ModelSerializer,),
-            attrs
+class TestProxiedPrimaryKeyRelatedField(APISimpleTestCase):
+    def setUp(self):
+        self.queryset = MockQueryset([
+            MockObject(pk=uuid.UUID(int=0), name='foo'),
+            MockObject(pk=uuid.UUID(int=1), name='bar'),
+            MockObject(pk=uuid.UUID(int=2), name='baz')
+        ])
+        self.instance = self.queryset.items[2]
+        self.field = serializers.PrimaryKeyRelatedField(
+            queryset=self.queryset,
+            pk_field=serializers.UUIDField(format='int')
         )
-        with self.assertRaises(AttributeError):
-            TestSerializer(data={'name': 'foo'})
+
+    def test_pk_related_lookup_exists(self):
+        instance = self.field.to_internal_value(self.instance.pk.int)
+        assert instance is self.instance
+
+    def test_pk_related_lookup_does_not_exist(self):
+        with pytest.raises(serializers.ValidationError) as excinfo:
+            self.field.to_internal_value(4)
+        msg = excinfo.value.detail[0]
+        assert msg == 'Invalid pk "00000000-0000-0000-0000-000000000004" - object does not exist.'
+
+    def test_pk_representation(self):
+        representation = self.field.to_representation(self.instance)
+        assert representation == self.instance.pk.int
 
 
-@unittest.skipIf(get_version() < '1.6.0', 'Upstream behaviour changed in v1.6')
-class RelatedFieldChoicesTests(TestCase):
-    """
-    Tests for #1408 "Web browseable API doesn't have blank option on drop down list box"
-    https://github.com/tomchristie/django-rest-framework/issues/1408
-    """
-    def test_blank_option_is_added_to_choice_if_required_equals_false(self):
+@override_settings(ROOT_URLCONF=[
+    url(r'^example/(?P<name>.+)/$', lambda: None, name='example'),
+])
+class TestHyperlinkedRelatedField(APISimpleTestCase):
+    def setUp(self):
+        self.queryset = MockQueryset([
+            MockObject(pk=1, name='foobar'),
+            MockObject(pk=2, name='bazABCqux'),
+        ])
+        self.field = serializers.HyperlinkedRelatedField(
+            view_name='example',
+            lookup_field='name',
+            lookup_url_kwarg='name',
+            queryset=self.queryset,
+        )
+        self.field.reverse = mock_reverse
+        self.field._context = {'request': True}
+
+    def test_representation_unsaved_object_with_non_nullable_pk(self):
+        representation = self.field.to_representation(MockObject(pk=''))
+        assert representation is None
+
+    def test_hyperlinked_related_lookup_exists(self):
+        instance = self.field.to_internal_value('http://example.org/example/foobar/')
+        assert instance is self.queryset.items[0]
+
+    def test_hyperlinked_related_lookup_url_encoded_exists(self):
+        instance = self.field.to_internal_value('http://example.org/example/baz%41%42%43qux/')
+        assert instance is self.queryset.items[1]
+
+    def test_hyperlinked_related_lookup_does_not_exist(self):
+        with pytest.raises(serializers.ValidationError) as excinfo:
+            self.field.to_internal_value('http://example.org/example/doesnotexist/')
+        msg = excinfo.value.detail[0]
+        assert msg == 'Invalid hyperlink - Object does not exist.'
+
+
+class TestHyperlinkedIdentityField(APISimpleTestCase):
+    def setUp(self):
+        self.instance = MockObject(pk=1, name='foo')
+        self.field = serializers.HyperlinkedIdentityField(view_name='example')
+        self.field.reverse = mock_reverse
+        self.field._context = {'request': True}
+
+    def test_representation(self):
+        representation = self.field.to_representation(self.instance)
+        assert representation == 'http://example.org/example/1/'
+
+    def test_representation_unsaved_object(self):
+        representation = self.field.to_representation(MockObject(pk=None))
+        assert representation is None
+
+    def test_representation_with_format(self):
+        self.field._context['format'] = 'xml'
+        representation = self.field.to_representation(self.instance)
+        assert representation == 'http://example.org/example/1.xml/'
+
+    def test_improperly_configured(self):
         """
-
+        If a matching view cannot be reversed with the given instance,
+        the the user has misconfigured something, as the URL conf and the
+        hyperlinked field do not match.
         """
-        post = BlogPost(title="Checking blank option is added")
-        post.save()
+        self.field.reverse = fail_reverse
+        with pytest.raises(ImproperlyConfigured):
+            self.field.to_representation(self.instance)
 
-        queryset = BlogPost.objects.all()
-        field = serializers.RelatedField(required=False, queryset=queryset)
 
-        choice_count = BlogPost.objects.count()
-        widget_count = len(field.widget.choices)
+class TestHyperlinkedIdentityFieldWithFormat(APISimpleTestCase):
+    """
+    Tests for a hyperlinked identity field that has a `format` set,
+    which enforces that alternate formats are never linked too.
 
-        self.assertEqual(widget_count, choice_count + 1, 'BLANK_CHOICE_DASH option should have been added')
+    Eg. If your API includes some endpoints that accept both `.xml` and `.json`,
+    but other endpoints that only accept `.json`, we allow for hyperlinked
+    relationships that enforce only a single suffix type.
+    """
+
+    def setUp(self):
+        self.instance = MockObject(pk=1, name='foo')
+        self.field = serializers.HyperlinkedIdentityField(view_name='example', format='json')
+        self.field.reverse = mock_reverse
+        self.field._context = {'request': True}
+
+    def test_representation(self):
+        representation = self.field.to_representation(self.instance)
+        assert representation == 'http://example.org/example/1/'
+
+    def test_representation_with_format(self):
+        self.field._context['format'] = 'xml'
+        representation = self.field.to_representation(self.instance)
+        assert representation == 'http://example.org/example/1.json/'
+
+
+class TestSlugRelatedField(APISimpleTestCase):
+    def setUp(self):
+        self.queryset = MockQueryset([
+            MockObject(pk=1, name='foo'),
+            MockObject(pk=2, name='bar'),
+            MockObject(pk=3, name='baz')
+        ])
+        self.instance = self.queryset.items[2]
+        self.field = serializers.SlugRelatedField(
+            slug_field='name', queryset=self.queryset
+        )
+
+    def test_slug_related_lookup_exists(self):
+        instance = self.field.to_internal_value(self.instance.name)
+        assert instance is self.instance
+
+    def test_slug_related_lookup_does_not_exist(self):
+        with pytest.raises(serializers.ValidationError) as excinfo:
+            self.field.to_internal_value('doesnotexist')
+        msg = excinfo.value.detail[0]
+        assert msg == 'Object with name=doesnotexist does not exist.'
+
+    def test_slug_related_lookup_invalid_type(self):
+        with pytest.raises(serializers.ValidationError) as excinfo:
+            self.field.to_internal_value(BadType())
+        msg = excinfo.value.detail[0]
+        assert msg == 'Invalid value.'
+
+    def test_representation(self):
+        representation = self.field.to_representation(self.instance)
+        assert representation == self.instance.name
+
+    def test_overriding_get_queryset(self):
+        qs = self.queryset
+
+        class NoQuerySetSlugRelatedField(serializers.SlugRelatedField):
+            def get_queryset(self):
+                return qs
+
+        field = NoQuerySetSlugRelatedField(slug_field='name')
+        field.to_internal_value(self.instance.name)
+
+
+class TestManyRelatedField(APISimpleTestCase):
+    def setUp(self):
+        self.instance = MockObject(pk=1, name='foo')
+        self.field = serializers.StringRelatedField(many=True)
+        self.field.field_name = 'foo'
+
+    def test_get_value_regular_dictionary_full(self):
+        assert 'bar' == self.field.get_value({'foo': 'bar'})
+        assert empty == self.field.get_value({'baz': 'bar'})
+
+    def test_get_value_regular_dictionary_partial(self):
+        setattr(self.field.root, 'partial', True)
+        assert 'bar' == self.field.get_value({'foo': 'bar'})
+        assert empty == self.field.get_value({'baz': 'bar'})
+
+    def test_get_value_multi_dictionary_full(self):
+        mvd = MultiValueDict({'foo': ['bar1', 'bar2']})
+        assert ['bar1', 'bar2'] == self.field.get_value(mvd)
+
+        mvd = MultiValueDict({'baz': ['bar1', 'bar2']})
+        assert [] == self.field.get_value(mvd)
+
+    def test_get_value_multi_dictionary_partial(self):
+        setattr(self.field.root, 'partial', True)
+        mvd = MultiValueDict({'foo': ['bar1', 'bar2']})
+        assert ['bar1', 'bar2'] == self.field.get_value(mvd)
+
+        mvd = MultiValueDict({'baz': ['bar1', 'bar2']})
+        assert empty == self.field.get_value(mvd)
+
+
+class TestHyperlink:
+    def setup(self):
+        self.default_hyperlink = serializers.Hyperlink('http://example.com', 'test')
+
+    def test_can_be_pickled(self):
+        import pickle
+        upkled = pickle.loads(pickle.dumps(self.default_hyperlink))
+        assert upkled == self.default_hyperlink
+        assert upkled.name == self.default_hyperlink.name

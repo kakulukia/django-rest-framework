@@ -1,113 +1,155 @@
 """
 The `compat` module provides support for backwards compatibility with older
-versions of django/python, and compatibility wrappers around optional packages.
+versions of Django/Python, and compatibility wrappers around optional packages.
 """
 
-# flake8: noqa
 from __future__ import unicode_literals
-import django
+
 import inspect
-from django.core.exceptions import ImproperlyConfigured
+
+import django
+from django.apps import apps
 from django.conf import settings
+from django.core import validators
+from django.core.exceptions import ImproperlyConfigured
+from django.db import models
 from django.utils import six
+from django.views.generic import View
 
-
-# Handle django.utils.encoding rename in 1.5 onwards.
-# smart_unicode -> smart_text
-# force_unicode -> force_text
 try:
-    from django.utils.encoding import smart_text
+    from django.urls import (  # noqa
+        URLPattern,
+        URLResolver,
+    )
 except ImportError:
-    from django.utils.encoding import smart_unicode as smart_text
+    # Will be removed in Django 2.0
+    from django.urls import (  # noqa
+        RegexURLPattern as URLPattern,
+        RegexURLResolver as URLResolver,
+    )
+
+
+def get_regex_pattern(urlpattern):
+    if hasattr(urlpattern, 'pattern'):
+        # Django 2.0
+        return urlpattern.pattern.regex.pattern
+    else:
+        # Django < 2.0
+        return urlpattern.regex.pattern
+
+
+def make_url_resolver(regex, urlpatterns):
+    try:
+        # Django 2.0
+        from django.urls.resolvers import RegexPattern
+        return URLResolver(RegexPattern(regex), urlpatterns)
+
+    except ImportError:
+        # Django < 2.0
+        return URLResolver(regex, urlpatterns)
+
+
+def unicode_repr(instance):
+    # Get the repr of an instance, but ensure it is a unicode string
+    # on both python 3 (already the case) and 2 (not the case).
+    if six.PY2:
+        return repr(instance).decode('utf-8')
+    return repr(instance)
+
+
+def unicode_to_repr(value):
+    # Coerce a unicode string to the correct repr return type, depending on
+    # the Python version. We wrap all our `__repr__` implementations with
+    # this and then use unicode throughout internally.
+    if six.PY2:
+        return value.encode('utf-8')
+    return value
+
+
+def unicode_http_header(value):
+    # Coerce HTTP header value to unicode.
+    if isinstance(value, six.binary_type):
+        return value.decode('iso-8859-1')
+    return value
+
+
+def distinct(queryset, base):
+    if settings.DATABASES[queryset.db]["ENGINE"] == "django.db.backends.oracle":
+        # distinct analogue for Oracle users
+        return base.filter(pk__in=set(queryset.values_list('pk', flat=True)))
+    return queryset.distinct()
+
+
+def _resolve_model(obj):
+    """
+    Resolve supplied `obj` to a Django model class.
+
+    `obj` must be a Django model class itself, or a string
+    representation of one.  Useful in situations like GH #1225 where
+    Django may not have resolved a string-based reference to a model in
+    another model's foreign key definition.
+
+    String representations should have the format:
+        'appname.ModelName'
+    """
+    if isinstance(obj, six.string_types) and len(obj.split('.')) == 2:
+        app_name, model_name = obj.split('.')
+        resolved_model = apps.get_model(app_name, model_name)
+        if resolved_model is None:
+            msg = "Django did not return a model for {0}.{1}"
+            raise ImproperlyConfigured(msg.format(app_name, model_name))
+        return resolved_model
+    elif inspect.isclass(obj) and issubclass(obj, models.Model):
+        return obj
+    raise ValueError("{0} is not a Django model".format(obj))
+
+
+# django.contrib.postgres requires psycopg2
 try:
-    from django.utils.encoding import force_text
+    from django.contrib.postgres import fields as postgres_fields
 except ImportError:
-    from django.utils.encoding import force_unicode as force_text
+    postgres_fields = None
 
 
-# HttpResponseBase only exists from 1.5 onwards
+# coreapi is optional (Note that uritemplate is a dependency of coreapi)
 try:
-    from django.http.response import HttpResponseBase
-except ImportError:
-    from django.http import HttpResponse as HttpResponseBase
+    import coreapi
+    import uritemplate
+except (ImportError, SyntaxError):
+    # SyntaxError is possible under python 3.2
+    coreapi = None
+    uritemplate = None
 
 
-# django-filter is optional
+# coreschema is optional
 try:
-    import django_filters
+    import coreschema
 except ImportError:
-    django_filters = None
+    coreschema = None
+
+
+# django-crispy-forms is optional
+try:
+    import crispy_forms
+except ImportError:
+    crispy_forms = None
+
+
+# requests is optional
+try:
+    import requests
+except ImportError:
+    requests = None
 
 
 # Django-guardian is optional. Import only if guardian is in INSTALLED_APPS
 # Fixes (#1712). We keep the try/except for the test suite.
 guardian = None
-if 'guardian' in settings.INSTALLED_APPS:
-    try:
-        import guardian
-        import guardian.shortcuts  # Fixes #1624
-    except ImportError:
-        pass
-
-
-# cStringIO only if it's available, otherwise StringIO
 try:
-    import cStringIO.StringIO as StringIO
+    if 'guardian' in settings.INSTALLED_APPS:
+        import guardian  # noqa
 except ImportError:
-    StringIO = six.StringIO
-
-BytesIO = six.BytesIO
-
-
-# urlparse compat import (Required because it changed in python 3.x)
-try:
-    from urllib import parse as urlparse
-except ImportError:
-    import urlparse
-
-# UserDict moves in Python 3
-try:
-    from UserDict import UserDict
-    from UserDict import DictMixin
-except ImportError:
-    from collections import UserDict
-    from collections import MutableMapping as DictMixin
-
-# Try to import PIL in either of the two ways it can end up installed.
-try:
-    from PIL import Image
-except ImportError:
-    try:
-        import Image
-    except ImportError:
-        Image = None
-
-
-def get_model_name(model_cls):
-    try:
-        return model_cls._meta.model_name
-    except AttributeError:
-        # < 1.6 used module_name instead of model_name
-        return model_cls._meta.module_name
-
-
-def get_concrete_model(model_cls):
-    try:
-        return model_cls._meta.concrete_model
-    except AttributeError:
-        # 1.3 does not include concrete model
-        return model_cls
-
-
-# View._allowed_methods only present from 1.5 onwards
-if django.VERSION >= (1, 5):
-    from django.views.generic import View
-else:
-    from django.views.generic import View as DjangoView
-
-    class View(DjangoView):
-        def _allowed_methods(self):
-            return [m.upper() for m in self.http_method_names if hasattr(self, m)]
+    pass
 
 
 # PATCH method is not implemented by Django
@@ -115,153 +157,149 @@ if 'patch' not in View.http_method_names:
     View.http_method_names = View.http_method_names + ['patch']
 
 
-# RequestFactory only provides `generic` from 1.5 onwards
-from django.test.client import RequestFactory as DjangoRequestFactory
-from django.test.client import FakePayload
-try:
-    # In 1.5 the test client uses force_bytes
-    from django.utils.encoding import force_bytes as force_bytes_or_smart_bytes
-except ImportError:
-    # In 1.4 the test client just uses smart_str
-    from django.utils.encoding import smart_str as force_bytes_or_smart_bytes
-
-class RequestFactory(DjangoRequestFactory):
-    def generic(self, method, path,
-            data='', content_type='application/octet-stream', **extra):
-        parsed = urlparse.urlparse(path)
-        data = force_bytes_or_smart_bytes(data, settings.DEFAULT_CHARSET)
-        r = {
-            'PATH_INFO':      self._get_path(parsed),
-            'QUERY_STRING':   force_text(parsed[4]),
-            'REQUEST_METHOD': str(method),
-        }
-        if data:
-            r.update({
-                'CONTENT_LENGTH': len(data),
-                'CONTENT_TYPE':   str(content_type),
-                'wsgi.input':     FakePayload(data),
-            })
-        elif django.VERSION <= (1, 4):
-            # For 1.3 we need an empty WSGI payload
-            r.update({
-                'wsgi.input': FakePayload('')
-            })
-        r.update(extra)
-        return self.request(**r)
-
-
 # Markdown is optional
 try:
     import markdown
+
+    if markdown.version <= '2.2':
+        HEADERID_EXT_PATH = 'headerid'
+        LEVEL_PARAM = 'level'
+    elif markdown.version < '2.6':
+        HEADERID_EXT_PATH = 'markdown.extensions.headerid'
+        LEVEL_PARAM = 'level'
+    else:
+        HEADERID_EXT_PATH = 'markdown.extensions.toc'
+        LEVEL_PARAM = 'baselevel'
 
     def apply_markdown(text):
         """
         Simple wrapper around :func:`markdown.markdown` to set the base level
         of '#' style headers to <h2>.
         """
-
-        extensions = ['headerid(level=2)']
-        safe_mode = False
-        md = markdown.Markdown(extensions=extensions, safe_mode=safe_mode)
+        extensions = [HEADERID_EXT_PATH]
+        extension_configs = {
+            HEADERID_EXT_PATH: {
+                LEVEL_PARAM: '2'
+            }
+        }
+        md = markdown.Markdown(
+            extensions=extensions, extension_configs=extension_configs
+        )
+        md_filter_add_syntax_highlight(md)
         return md.convert(text)
 except ImportError:
     apply_markdown = None
+    markdown = None
 
 
-# Yaml is optional
 try:
-    import yaml
+    import pygments
+    from pygments.lexers import get_lexer_by_name, TextLexer
+    from pygments.formatters import HtmlFormatter
+
+    def pygments_highlight(text, lang, style):
+        lexer = get_lexer_by_name(lang, stripall=False)
+        formatter = HtmlFormatter(nowrap=True, style=style)
+        return pygments.highlight(text, lexer, formatter)
+
+    def pygments_css(style):
+        formatter = HtmlFormatter(style=style)
+        return formatter.get_style_defs('.highlight')
+
 except ImportError:
-    yaml = None
+    pygments = None
 
+    def pygments_highlight(text, lang, style):
+        return text
 
-# XML is optional
-try:
-    import defusedxml.ElementTree as etree
-except ImportError:
-    etree = None
+    def pygments_css(style):
+        return None
 
+if markdown is not None and pygments is not None:
+    # starting from this blogpost and modified to support current markdown extensions API
+    # https://zerokspot.com/weblog/2008/06/18/syntax-highlighting-in-markdown-with-pygments/
 
-# OAuth2 is optional
-try:
-    # Note: The `oauth2` package actually provides oauth1.0a support.  Urg.
-    import oauth2 as oauth
-except ImportError:
-    oauth = None
+    from markdown.preprocessors import Preprocessor
+    import re
 
+    class CodeBlockPreprocessor(Preprocessor):
+        pattern = re.compile(
+            r'^\s*``` *([^\n]+)\n(.+?)^\s*```', re.M | re.S)
 
-# OAuthProvider is optional
-try:
-    import oauth_provider
-    from oauth_provider.store import store as oauth_provider_store
+        formatter = HtmlFormatter()
 
-    # check_nonce's calling signature in django-oauth-plus changes sometime
-    # between versions 2.0 and 2.2.1
-    def check_nonce(request, oauth_request, oauth_nonce, oauth_timestamp):
-        check_nonce_args = inspect.getargspec(oauth_provider_store.check_nonce).args
-        if 'timestamp' in check_nonce_args:
-            return oauth_provider_store.check_nonce(
-                request, oauth_request, oauth_nonce, oauth_timestamp
-            )
-        return oauth_provider_store.check_nonce(
-            request, oauth_request, oauth_nonce
-        )
+        def run(self, lines):
+            def repl(m):
+                try:
+                    lexer = get_lexer_by_name(m.group(1))
+                except (ValueError, NameError):
+                    lexer = TextLexer()
+                code = m.group(2).replace('\t', '    ')
+                code = pygments.highlight(code, lexer, self.formatter)
+                code = code.replace('\n\n', '\n&nbsp;\n').replace('\n', '<br />').replace('\\@', '@')
+                return '\n\n%s\n\n' % code
+            ret = self.pattern.sub(repl, "\n".join(lines))
+            return ret.split("\n")
 
-except (ImportError, ImproperlyConfigured):
-    oauth_provider = None
-    oauth_provider_store = None
-    check_nonce = None
-
-
-# OAuth 2 support is optional
-try:
-    import provider as oauth2_provider
-    from provider import scope as oauth2_provider_scope
-    from provider import constants as oauth2_constants
-    if oauth2_provider.__version__ in ('0.2.3', '0.2.4'):
-        # 0.2.3 and 0.2.4 are supported version that do not support
-        # timezone aware datetimes
-        import datetime
-        provider_now = datetime.datetime.now
-    else:
-        # Any other supported version does use timezone aware datetimes
-        from django.utils.timezone import now as provider_now
-except ImportError:
-    oauth2_provider = None
-    oauth2_provider_scope = None
-    oauth2_constants = None
-    provider_now = None
-
-
-# Handle lazy strings across Py2/Py3
-from django.utils.functional import Promise
-
-if six.PY3:
-    def is_non_str_iterable(obj):
-        if (isinstance(obj, str) or
-            (isinstance(obj, Promise) and obj._delegate_text)):
-            return False
-        return hasattr(obj, '__iter__')
+    def md_filter_add_syntax_highlight(md):
+        md.preprocessors.add('highlight', CodeBlockPreprocessor(), "_begin")
+        return True
 else:
-    def is_non_str_iterable(obj):
-        return hasattr(obj, '__iter__')
+    def md_filter_add_syntax_highlight(md):
+        return False
 
-
+# pytz is required from Django 1.11. Remove when dropping Django 1.10 support.
 try:
-    from django.utils.encoding import python_2_unicode_compatible
+    import pytz  # noqa
+    from pytz.exceptions import InvalidTimeError
 except ImportError:
-    def python_2_unicode_compatible(klass):
-        """
-        A decorator that defines __unicode__ and __str__ methods under Python 2.
-        Under Python 3 it does nothing.
+    InvalidTimeError = Exception
 
-        To support Python 2 and 3 with a single code base, define a __str__ method
-        returning text and apply this decorator to the class.
-        """
-        if '__str__' not in klass.__dict__:
-            raise ValueError("@python_2_unicode_compatible cannot be applied "
-                             "to %s because it doesn't define __str__()." %
-                             klass.__name__)
-        klass.__unicode__ = klass.__str__
-        klass.__str__ = lambda self: self.__unicode__().encode('utf-8')
-        return klass
+
+# `separators` argument to `json.dumps()` differs between 2.x and 3.x
+# See: http://bugs.python.org/issue22767
+if six.PY3:
+    SHORT_SEPARATORS = (',', ':')
+    LONG_SEPARATORS = (', ', ': ')
+    INDENT_SEPARATORS = (',', ': ')
+else:
+    SHORT_SEPARATORS = (b',', b':')
+    LONG_SEPARATORS = (b', ', b': ')
+    INDENT_SEPARATORS = (b',', b': ')
+
+
+class CustomValidatorMessage(object):
+    """
+    We need to avoid evaluation of `lazy` translated `message` in `django.core.validators.BaseValidator.__init__`.
+    https://github.com/django/django/blob/75ed5900321d170debef4ac452b8b3cf8a1c2384/django/core/validators.py#L297
+
+    Ref: https://github.com/encode/django-rest-framework/pull/5452
+    """
+
+    def __init__(self, *args, **kwargs):
+        self.message = kwargs.pop('message', self.message)
+        super(CustomValidatorMessage, self).__init__(*args, **kwargs)
+
+
+class MinValueValidator(CustomValidatorMessage, validators.MinValueValidator):
+    pass
+
+
+class MaxValueValidator(CustomValidatorMessage, validators.MaxValueValidator):
+    pass
+
+
+class MinLengthValidator(CustomValidatorMessage, validators.MinLengthValidator):
+    pass
+
+
+class MaxLengthValidator(CustomValidatorMessage, validators.MaxLengthValidator):
+    pass
+
+
+def authenticate(request=None, **credentials):
+    from django.contrib.auth import authenticate
+    if django.VERSION < (1, 11):
+        return authenticate(**credentials)
+    else:
+        return authenticate(request=request, **credentials)

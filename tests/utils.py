@@ -1,25 +1,56 @@
-from contextlib import contextmanager
-from django.utils import six
-from rest_framework.settings import api_settings
+from django.core.exceptions import ObjectDoesNotExist
+from django.urls import NoReverseMatch
 
 
-@contextmanager
-def temporary_setting(setting, value, module=None):
+class MockObject(object):
+    def __init__(self, **kwargs):
+        self._kwargs = kwargs
+        for key, val in kwargs.items():
+            setattr(self, key, val)
+
+    def __str__(self):
+        kwargs_str = ', '.join([
+            '%s=%s' % (key, value)
+            for key, value in sorted(self._kwargs.items())
+        ])
+        return '<MockObject %s>' % kwargs_str
+
+
+class MockQueryset(object):
+    def __init__(self, iterable):
+        self.items = iterable
+
+    def __getitem__(self, val):
+        return self.items[val]
+
+    def get(self, **lookup):
+        for item in self.items:
+            if all([
+                getattr(item, key, None) == value
+                for key, value in lookup.items()
+            ]):
+                return item
+        raise ObjectDoesNotExist()
+
+
+class BadType(object):
     """
-    Temporarily change value of setting for test.
-
-    Optionally reload given module, useful when module uses value of setting on
-    import.
+    When used as a lookup with a `MockQueryset`, these objects
+    will raise a `TypeError`, as occurs in Django when making
+    queryset lookups with an incorrect type for the lookup value.
     """
-    original_value = getattr(api_settings, setting)
-    setattr(api_settings, setting, value)
+    def __eq__(self):
+        raise TypeError()
 
-    if module is not None:
-        six.moves.reload_module(module)
 
-    yield
+def mock_reverse(view_name, args=None, kwargs=None, request=None, format=None):
+    args = args or []
+    kwargs = kwargs or {}
+    value = (args + list(kwargs.values()) + ['-'])[0]
+    prefix = 'http://example.org' if request else ''
+    suffix = ('.' + format) if (format is not None) else ''
+    return '%s/%s/%s%s/' % (prefix, view_name, value, suffix)
 
-    setattr(api_settings, setting, original_value)
 
-    if module is not None:
-        six.moves.reload_module(module)
+def fail_reverse(view_name, args=None, kwargs=None, request=None, format=None):
+    raise NoReverseMatch()

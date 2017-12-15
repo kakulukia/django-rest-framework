@@ -1,38 +1,46 @@
 # -*- coding: utf-8 -*-
 from __future__ import unicode_literals
 
-from decimal import Decimal
-from django.conf.urls import patterns, url, include
+import re
+from collections import MutableMapping, OrderedDict
+
+import pytest
+from django.conf.urls import include, url
 from django.core.cache import cache
 from django.db import models
-from django.test import TestCase
-from django.utils import six, unittest
+from django.http.request import HttpRequest
+from django.test import TestCase, override_settings
+from django.utils import six
+from django.utils.safestring import SafeText
 from django.utils.translation import ugettext_lazy as _
-from rest_framework import status, permissions
-from rest_framework.compat import yaml, etree, StringIO
+
+import coreapi
+from rest_framework import permissions, serializers, status
+from rest_framework.renderers import (
+    AdminRenderer, BaseRenderer, BrowsableAPIRenderer, DocumentationRenderer,
+    HTMLFormRenderer, JSONRenderer, SchemaJSRenderer, StaticHTMLRenderer
+)
+from rest_framework.request import Request
 from rest_framework.response import Response
-from rest_framework.views import APIView
-from rest_framework.renderers import BaseRenderer, JSONRenderer, YAMLRenderer, \
-    XMLRenderer, JSONPRenderer, BrowsableAPIRenderer, UnicodeJSONRenderer, UnicodeYAMLRenderer
-from rest_framework.parsers import YAMLParser, XMLParser
 from rest_framework.settings import api_settings
 from rest_framework.test import APIRequestFactory
-from collections import MutableMapping
-import datetime
-import json
-import pickle
-import re
-
+from rest_framework.utils import json
+from rest_framework.views import APIView
 
 DUMMYSTATUS = status.HTTP_200_OK
 DUMMYCONTENT = 'dummycontent'
 
-RENDERER_A_SERIALIZER = lambda x: ('Renderer A: %s' % x).encode('ascii')
-RENDERER_B_SERIALIZER = lambda x: ('Renderer B: %s' % x).encode('ascii')
+
+def RENDERER_A_SERIALIZER(x):
+    return ('Renderer A: %s' % x).encode('ascii')
+
+
+def RENDERER_B_SERIALIZER(x):
+    return ('Renderer B: %s' % x).encode('ascii')
 
 
 expected_results = [
-    ((elem for elem in [1, 2, 3]), JSONRenderer, b'[1, 2, 3]')  # Generator
+    ((elem for elem in [1, 2, 3]), JSONRenderer, b'[1,2,3]')  # Generator
 ]
 
 
@@ -78,7 +86,7 @@ class MockGETView(APIView):
 
 class MockPOSTView(APIView):
     def post(self, request, **kwargs):
-        return Response({'foo': request.DATA})
+        return Response({'foo': request.data})
 
 
 class EmptyGETView(APIView):
@@ -101,19 +109,17 @@ class HTMLView1(APIView):
     def get(self, request, **kwargs):
         return Response('text')
 
-urlpatterns = patterns(
-    '',
+
+urlpatterns = [
     url(r'^.*\.(?P<format>.+)$', MockView.as_view(renderer_classes=[RendererA, RendererB])),
     url(r'^$', MockView.as_view(renderer_classes=[RendererA, RendererB])),
     url(r'^cache$', MockGETView.as_view()),
-    url(r'^jsonp/jsonrenderer$', MockGETView.as_view(renderer_classes=[JSONRenderer, JSONPRenderer])),
-    url(r'^jsonp/nojsonrenderer$', MockGETView.as_view(renderer_classes=[JSONPRenderer])),
     url(r'^parseerror$', MockPOSTView.as_view(renderer_classes=[JSONRenderer, BrowsableAPIRenderer])),
     url(r'^html$', HTMLView.as_view()),
     url(r'^html1$', HTMLView1.as_view()),
     url(r'^empty$', EmptyGETView.as_view()),
     url(r'^api', include('rest_framework.urls', namespace='rest_framework'))
-)
+]
 
 
 class POSTDeniedPermission(permissions.BasePermission):
@@ -148,13 +154,11 @@ class DocumentingRendererTests(TestCase):
         self.assertContains(response, '>PATCH<')
 
 
+@override_settings(ROOT_URLCONF='tests.test_renderers')
 class RendererEndToEndTests(TestCase):
     """
     End-to-end testing of renderers using an RendererMixin on a generic view.
     """
-
-    urls = 'tests.test_renderers'
-
     def test_default_renderer_serializes_content(self):
         """If the Accept header is not set the default renderer should serialize the response."""
         resp = self.client.get('/')
@@ -188,17 +192,6 @@ class RendererEndToEndTests(TestCase):
         """If the Accept header is set the specified renderer should serialize the response.
         (In this case we check that works for a non-default renderer)"""
         resp = self.client.get('/', HTTP_ACCEPT=RendererB.media_type)
-        self.assertEqual(resp['Content-Type'], RendererB.media_type + '; charset=utf-8')
-        self.assertEqual(resp.content, RENDERER_B_SERIALIZER(DUMMYCONTENT))
-        self.assertEqual(resp.status_code, DUMMYSTATUS)
-
-    def test_specified_renderer_serializes_content_on_accept_query(self):
-        """The '_accept' query string should behave in the same way as the Accept header."""
-        param = '?%s=%s' % (
-            api_settings.URL_ACCEPT_OVERRIDE,
-            RendererB.media_type
-        )
-        resp = self.client.get('/' + param)
         self.assertEqual(resp['Content-Type'], RendererB.media_type + '; charset=utf-8')
         self.assertEqual(resp.content, RENDERER_B_SERIALIZER(DUMMYCONTENT))
         self.assertEqual(resp.status_code, DUMMYSTATUS)
@@ -251,7 +244,7 @@ class RendererEndToEndTests(TestCase):
         """
         Regression test for #1196
 
-        https://github.com/tomchristie/django-rest-framework/issues/1196
+        https://github.com/encode/django-rest-framework/issues/1196
         """
         resp = self.client.get('/empty')
         self.assertEqual(resp.get('Content-Type', None), None)
@@ -270,7 +263,7 @@ class RendererEndToEndTests(TestCase):
         self.assertNotContains(resp, '>text/html; charset=utf-8<')
 
 
-_flat_repr = '{"foo": ["bar", "baz"]}'
+_flat_repr = '{"foo":["bar","baz"]}'
 _indented_repr = '{\n  "foo": [\n    "bar",\n    "baz"\n  ]\n}'
 
 
@@ -280,6 +273,18 @@ def strip_trailing_whitespace(content):
     different versions of the json lib.
     """
     return re.sub(' +\n', '\n', content)
+
+
+class BaseRendererTests(TestCase):
+    """
+    Tests BaseRenderer
+    """
+    def test_render_raise_error(self):
+        """
+        BaseRenderer.render should raise NotImplementedError
+        """
+        with pytest.raises(NotImplementedError):
+            BaseRenderer().render('test')
 
 
 class JSONRendererTests(TestCase):
@@ -299,19 +304,19 @@ class JSONRendererTests(TestCase):
         qs = DummyTestModel.objects.values('id', 'name')
         ret = JSONRenderer().render(qs)
         data = json.loads(ret.decode('utf-8'))
-        self.assertEquals(data, [{'id': o.id, 'name': o.name}])
+        self.assertEqual(data, [{'id': o.id, 'name': o.name}])
 
     def test_render_queryset_values_list(self):
         o = DummyTestModel.objects.create(name='dummy')
         qs = DummyTestModel.objects.values_list('id', 'name')
         ret = JSONRenderer().render(qs)
         data = json.loads(ret.decode('utf-8'))
-        self.assertEquals(data, [[o.id, o.name]])
+        self.assertEqual(data, [[o.id, o.name]])
 
     def test_render_dict_abc_obj(self):
         class Dict(MutableMapping):
             def __init__(self):
-                self._dict = dict()
+                self._dict = {}
 
             def __getitem__(self, key):
                 return self._dict.__getitem__(key)
@@ -336,7 +341,7 @@ class JSONRendererTests(TestCase):
         x[2] = 3
         ret = JSONRenderer().render(x)
         data = json.loads(ret.decode('utf-8'))
-        self.assertEquals(data, {'key': 'string value', '2': 3})
+        self.assertEqual(data, {'key': 'string value', '2': 3})
 
     def test_render_obj_with_getitem(self):
         class DictLike(object):
@@ -353,6 +358,19 @@ class JSONRendererTests(TestCase):
         x.set({'a': 1, 'b': 'string'})
         with self.assertRaises(TypeError):
             JSONRenderer().render(x)
+
+    def test_float_strictness(self):
+        renderer = JSONRenderer()
+
+        # Default to strict
+        for value in [float('inf'), float('-inf'), float('nan')]:
+            with pytest.raises(ValueError):
+                renderer.render(value)
+
+        renderer.strict = False
+        assert renderer.render(float('inf')) == b'Infinity'
+        assert renderer.render(float('-inf')) == b'-Infinity'
+        assert renderer.render(float('nan')) == b'NaN'
 
     def test_without_content_type_args(self):
         """
@@ -373,12 +391,6 @@ class JSONRendererTests(TestCase):
         content = renderer.render(obj, 'application/json; indent=2')
         self.assertEqual(strip_trailing_whitespace(content.decode('utf-8')), _indented_repr)
 
-    def test_check_ascii(self):
-        obj = {'countries': ['United Kingdom', 'France', 'España']}
-        renderer = JSONRenderer()
-        content = renderer.render(obj, 'application/json')
-        self.assertEqual(content, '{"countries": ["United Kingdom", "France", "Espa\\u00f1a"]}'.encode('utf-8'))
-
 
 class UnicodeJSONRendererTests(TestCase):
     """
@@ -386,301 +398,358 @@ class UnicodeJSONRendererTests(TestCase):
     """
     def test_proper_encoding(self):
         obj = {'countries': ['United Kingdom', 'France', 'España']}
-        renderer = UnicodeJSONRenderer()
+        renderer = JSONRenderer()
         content = renderer.render(obj, 'application/json')
-        self.assertEqual(content, '{"countries": ["United Kingdom", "France", "España"]}'.encode('utf-8'))
+        self.assertEqual(content, '{"countries":["United Kingdom","France","España"]}'.encode('utf-8'))
+
+    def test_u2028_u2029(self):
+        # The \u2028 and \u2029 characters should be escaped,
+        # even when the non-escaping unicode representation is used.
+        # Regression test for #2169
+        obj = {'should_escape': '\u2028\u2029'}
+        renderer = JSONRenderer()
+        content = renderer.render(obj, 'application/json')
+        self.assertEqual(content, '{"should_escape":"\\u2028\\u2029"}'.encode('utf-8'))
 
 
-class JSONPRendererTests(TestCase):
+class AsciiJSONRendererTests(TestCase):
     """
-    Tests specific to the JSONP Renderer
+    Tests specific for the Unicode JSON Renderer
     """
-
-    urls = 'tests.test_renderers'
-
-    def test_without_callback_with_json_renderer(self):
-        """
-        Test JSONP rendering with View JSON Renderer.
-        """
-        resp = self.client.get(
-            '/jsonp/jsonrenderer',
-            HTTP_ACCEPT='application/javascript'
-        )
-        self.assertEqual(resp.status_code, status.HTTP_200_OK)
-        self.assertEqual(resp['Content-Type'], 'application/javascript; charset=utf-8')
-        self.assertEqual(
-            resp.content,
-            ('callback(%s);' % _flat_repr).encode('ascii')
-        )
-
-    def test_without_callback_without_json_renderer(self):
-        """
-        Test JSONP rendering without View JSON Renderer.
-        """
-        resp = self.client.get(
-            '/jsonp/nojsonrenderer',
-            HTTP_ACCEPT='application/javascript'
-        )
-        self.assertEqual(resp.status_code, status.HTTP_200_OK)
-        self.assertEqual(resp['Content-Type'], 'application/javascript; charset=utf-8')
-        self.assertEqual(
-            resp.content,
-            ('callback(%s);' % _flat_repr).encode('ascii')
-        )
-
-    def test_with_callback(self):
-        """
-        Test JSONP rendering with callback function name.
-        """
-        callback_func = 'myjsonpcallback'
-        resp = self.client.get(
-            '/jsonp/nojsonrenderer?callback=' + callback_func,
-            HTTP_ACCEPT='application/javascript'
-        )
-        self.assertEqual(resp.status_code, status.HTTP_200_OK)
-        self.assertEqual(resp['Content-Type'], 'application/javascript; charset=utf-8')
-        self.assertEqual(
-            resp.content,
-            ('%s(%s);' % (callback_func, _flat_repr)).encode('ascii')
-        )
-
-
-if yaml:
-    _yaml_repr = 'foo: [bar, baz]\n'
-
-    class YAMLRendererTests(TestCase):
-        """
-        Tests specific to the YAML Renderer
-        """
-
-        def test_render(self):
-            """
-            Test basic YAML rendering.
-            """
-            obj = {'foo': ['bar', 'baz']}
-            renderer = YAMLRenderer()
-            content = renderer.render(obj, 'application/yaml')
-            self.assertEqual(content, _yaml_repr)
-
-        def test_render_and_parse(self):
-            """
-            Test rendering and then parsing returns the original object.
-            IE obj -> render -> parse -> obj.
-            """
-            obj = {'foo': ['bar', 'baz']}
-
-            renderer = YAMLRenderer()
-            parser = YAMLParser()
-
-            content = renderer.render(obj, 'application/yaml')
-            data = parser.parse(StringIO(content))
-            self.assertEqual(obj, data)
-
-        def test_render_decimal(self):
-            """
-            Test YAML decimal rendering.
-            """
-            renderer = YAMLRenderer()
-            content = renderer.render({'field': Decimal('111.2')}, 'application/yaml')
-            self.assertYAMLContains(content, "field: '111.2'")
-
-        def assertYAMLContains(self, content, string):
-            self.assertTrue(string in content, '%r not in %r' % (string, content))
-
-    class UnicodeYAMLRendererTests(TestCase):
-        """
-        Tests specific for the Unicode YAML Renderer
-        """
-        def test_proper_encoding(self):
-            obj = {'countries': ['United Kingdom', 'France', 'España']}
-            renderer = UnicodeYAMLRenderer()
-            content = renderer.render(obj, 'application/yaml')
-            self.assertEqual(content.strip(), 'countries: [United Kingdom, France, España]'.encode('utf-8'))
-
-
-class XMLRendererTestCase(TestCase):
-    """
-    Tests specific to the XML Renderer
-    """
-
-    _complex_data = {
-        "creation_date": datetime.datetime(2011, 12, 25, 12, 45, 00),
-        "name": "name",
-        "sub_data_list": [
-            {
-                "sub_id": 1,
-                "sub_name": "first"
-            },
-            {
-                "sub_id": 2,
-                "sub_name": "second"
-            }
-        ]
-    }
-
-    def test_render_string(self):
-        """
-        Test XML rendering.
-        """
-        renderer = XMLRenderer()
-        content = renderer.render({'field': 'astring'}, 'application/xml')
-        self.assertXMLContains(content, '<field>astring</field>')
-
-    def test_render_integer(self):
-        """
-        Test XML rendering.
-        """
-        renderer = XMLRenderer()
-        content = renderer.render({'field': 111}, 'application/xml')
-        self.assertXMLContains(content, '<field>111</field>')
-
-    def test_render_datetime(self):
-        """
-        Test XML rendering.
-        """
-        renderer = XMLRenderer()
-        content = renderer.render({
-            'field': datetime.datetime(2011, 12, 25, 12, 45, 00)
-        }, 'application/xml')
-        self.assertXMLContains(content, '<field>2011-12-25 12:45:00</field>')
-
-    def test_render_float(self):
-        """
-        Test XML rendering.
-        """
-        renderer = XMLRenderer()
-        content = renderer.render({'field': 123.4}, 'application/xml')
-        self.assertXMLContains(content, '<field>123.4</field>')
-
-    def test_render_decimal(self):
-        """
-        Test XML rendering.
-        """
-        renderer = XMLRenderer()
-        content = renderer.render({'field': Decimal('111.2')}, 'application/xml')
-        self.assertXMLContains(content, '<field>111.2</field>')
-
-    def test_render_none(self):
-        """
-        Test XML rendering.
-        """
-        renderer = XMLRenderer()
-        content = renderer.render({'field': None}, 'application/xml')
-        self.assertXMLContains(content, '<field></field>')
-
-    def test_render_complex_data(self):
-        """
-        Test XML rendering.
-        """
-        renderer = XMLRenderer()
-        content = renderer.render(self._complex_data, 'application/xml')
-        self.assertXMLContains(content, '<sub_name>first</sub_name>')
-        self.assertXMLContains(content, '<sub_name>second</sub_name>')
-
-    @unittest.skipUnless(etree, 'defusedxml not installed')
-    def test_render_and_parse_complex_data(self):
-        """
-        Test XML rendering.
-        """
-        renderer = XMLRenderer()
-        content = StringIO(renderer.render(self._complex_data, 'application/xml'))
-
-        parser = XMLParser()
-        complex_data_out = parser.parse(content)
-        error_msg = "complex data differs!IN:\n %s \n\n OUT:\n %s" % (repr(self._complex_data), repr(complex_data_out))
-        self.assertEqual(self._complex_data, complex_data_out, error_msg)
-
-    def assertXMLContains(self, xml, string):
-        self.assertTrue(xml.startswith('<?xml version="1.0" encoding="utf-8"?>\n<root>'))
-        self.assertTrue(xml.endswith('</root>'))
-        self.assertTrue(string in xml, '%r not in %r' % (string, xml))
+    def test_proper_encoding(self):
+        class AsciiJSONRenderer(JSONRenderer):
+            ensure_ascii = True
+        obj = {'countries': ['United Kingdom', 'France', 'España']}
+        renderer = AsciiJSONRenderer()
+        content = renderer.render(obj, 'application/json')
+        self.assertEqual(content, '{"countries":["United Kingdom","France","Espa\\u00f1a"]}'.encode('utf-8'))
 
 
 # Tests for caching issue, #346
+@override_settings(ROOT_URLCONF='tests.test_renderers')
 class CacheRenderTest(TestCase):
     """
     Tests specific to caching responses
     """
-
-    urls = 'tests.test_renderers'
-
-    cache_key = 'just_a_cache_key'
-
-    @classmethod
-    def _get_pickling_errors(cls, obj, seen=None):
-        """ Return any errors that would be raised if `obj' is pickled
-        Courtesy of koffie @ http://stackoverflow.com/a/7218986/109897
-        """
-        if seen is None:
-            seen = []
-        try:
-            state = obj.__getstate__()
-        except AttributeError:
-            return
-        if state is None:
-            return
-        if isinstance(state, tuple):
-            if not isinstance(state[0], dict):
-                state = state[1]
-            else:
-                state = state[0].update(state[1])
-        result = {}
-        for i in state:
-            try:
-                pickle.dumps(state[i], protocol=2)
-            except pickle.PicklingError:
-                if not state[i] in seen:
-                    seen.append(state[i])
-                    result[i] = cls._get_pickling_errors(state[i], seen)
-        return result
-
-    def http_resp(self, http_method, url):
-        """
-        Simple wrapper for Client http requests
-        Removes the `client' and `request' attributes from as they are
-        added by django.test.client.Client and not part of caching
-        responses outside of tests.
-        """
-        method = getattr(self.client, http_method)
-        resp = method(url)
-        del resp.client, resp.request
-        try:
-            del resp.wsgi_request
-        except AttributeError:
-            pass
-        return resp
-
-    def test_obj_pickling(self):
-        """
-        Test that responses are properly pickled
-        """
-        resp = self.http_resp('get', '/cache')
-
-        # Make sure that no pickling errors occurred
-        self.assertEqual(self._get_pickling_errors(resp), {})
-
-        # Unfortunately LocMem backend doesn't raise PickleErrors but returns
-        # None instead.
-        cache.set(self.cache_key, resp)
-        self.assertTrue(cache.get(self.cache_key) is not None)
-
     def test_head_caching(self):
         """
         Test caching of HEAD requests
         """
-        resp = self.http_resp('head', '/cache')
-        cache.set(self.cache_key, resp)
-
-        cached_resp = cache.get(self.cache_key)
-        self.assertIsInstance(cached_resp, Response)
+        response = self.client.head('/cache')
+        cache.set('key', response)
+        cached_response = cache.get('key')
+        assert isinstance(cached_response, Response)
+        assert cached_response.content == response.content
+        assert cached_response.status_code == response.status_code
 
     def test_get_caching(self):
         """
         Test caching of GET requests
         """
-        resp = self.http_resp('get', '/cache')
-        cache.set(self.cache_key, resp)
+        response = self.client.get('/cache')
+        cache.set('key', response)
+        cached_response = cache.get('key')
+        assert isinstance(cached_response, Response)
+        assert cached_response.content == response.content
+        assert cached_response.status_code == response.status_code
 
-        cached_resp = cache.get(self.cache_key)
-        self.assertIsInstance(cached_resp, Response)
-        self.assertEqual(cached_resp.content, resp.content)
+
+class TestJSONIndentationStyles:
+    def test_indented(self):
+        renderer = JSONRenderer()
+        data = OrderedDict([('a', 1), ('b', 2)])
+        assert renderer.render(data) == b'{"a":1,"b":2}'
+
+    def test_compact(self):
+        renderer = JSONRenderer()
+        data = OrderedDict([('a', 1), ('b', 2)])
+        context = {'indent': 4}
+        assert (
+            renderer.render(data, renderer_context=context) ==
+            b'{\n    "a": 1,\n    "b": 2\n}'
+        )
+
+    def test_long_form(self):
+        renderer = JSONRenderer()
+        renderer.compact = False
+        data = OrderedDict([('a', 1), ('b', 2)])
+        assert renderer.render(data) == b'{"a": 1, "b": 2}'
+
+
+class TestHiddenFieldHTMLFormRenderer(TestCase):
+    def test_hidden_field_rendering(self):
+        class TestSerializer(serializers.Serializer):
+            published = serializers.HiddenField(default=True)
+
+        serializer = TestSerializer(data={})
+        serializer.is_valid()
+        renderer = HTMLFormRenderer()
+        field = serializer['published']
+        rendered = renderer.render_field(field, {})
+        assert rendered == ''
+
+
+class TestHTMLFormRenderer(TestCase):
+    def setUp(self):
+        class TestSerializer(serializers.Serializer):
+            test_field = serializers.CharField()
+
+        self.renderer = HTMLFormRenderer()
+        self.serializer = TestSerializer(data={})
+
+    def test_render_with_default_args(self):
+        self.serializer.is_valid()
+        renderer = HTMLFormRenderer()
+
+        result = renderer.render(self.serializer.data)
+
+        self.assertIsInstance(result, SafeText)
+
+    def test_render_with_provided_args(self):
+        self.serializer.is_valid()
+        renderer = HTMLFormRenderer()
+
+        result = renderer.render(self.serializer.data, None, {})
+
+        self.assertIsInstance(result, SafeText)
+
+
+class TestChoiceFieldHTMLFormRenderer(TestCase):
+    """
+    Test rendering ChoiceField with HTMLFormRenderer.
+    """
+
+    def setUp(self):
+        choices = ((1, 'Option1'), (2, 'Option2'), (12, 'Option12'))
+
+        class TestSerializer(serializers.Serializer):
+            test_field = serializers.ChoiceField(choices=choices,
+                                                 initial=2)
+
+        self.TestSerializer = TestSerializer
+        self.renderer = HTMLFormRenderer()
+
+    def test_render_initial_option(self):
+        serializer = self.TestSerializer()
+        result = self.renderer.render(serializer.data)
+
+        self.assertIsInstance(result, SafeText)
+
+        self.assertInHTML('<option value="2" selected>Option2</option>',
+                          result)
+        self.assertInHTML('<option value="1">Option1</option>', result)
+        self.assertInHTML('<option value="12">Option12</option>', result)
+
+    def test_render_selected_option(self):
+        serializer = self.TestSerializer(data={'test_field': '12'})
+
+        serializer.is_valid()
+        result = self.renderer.render(serializer.data)
+
+        self.assertIsInstance(result, SafeText)
+
+        self.assertInHTML('<option value="12" selected>Option12</option>',
+                          result)
+        self.assertInHTML('<option value="1">Option1</option>', result)
+        self.assertInHTML('<option value="2">Option2</option>', result)
+
+
+class TestMultipleChoiceFieldHTMLFormRenderer(TestCase):
+    """
+    Test rendering MultipleChoiceField with HTMLFormRenderer.
+    """
+
+    def setUp(self):
+        self.renderer = HTMLFormRenderer()
+
+    def test_render_selected_option_with_string_option_ids(self):
+        choices = (('1', 'Option1'), ('2', 'Option2'), ('12', 'Option12'),
+                   ('}', 'OptionBrace'))
+
+        class TestSerializer(serializers.Serializer):
+            test_field = serializers.MultipleChoiceField(choices=choices)
+
+        serializer = TestSerializer(data={'test_field': ['12']})
+        serializer.is_valid()
+
+        result = self.renderer.render(serializer.data)
+
+        self.assertIsInstance(result, SafeText)
+
+        self.assertInHTML('<option value="12" selected>Option12</option>',
+                          result)
+        self.assertInHTML('<option value="1">Option1</option>', result)
+        self.assertInHTML('<option value="2">Option2</option>', result)
+        self.assertInHTML('<option value="}">OptionBrace</option>', result)
+
+    def test_render_selected_option_with_integer_option_ids(self):
+        choices = ((1, 'Option1'), (2, 'Option2'), (12, 'Option12'))
+
+        class TestSerializer(serializers.Serializer):
+            test_field = serializers.MultipleChoiceField(choices=choices)
+
+        serializer = TestSerializer(data={'test_field': ['12']})
+        serializer.is_valid()
+
+        result = self.renderer.render(serializer.data)
+
+        self.assertIsInstance(result, SafeText)
+
+        self.assertInHTML('<option value="12" selected>Option12</option>',
+                          result)
+        self.assertInHTML('<option value="1">Option1</option>', result)
+        self.assertInHTML('<option value="2">Option2</option>', result)
+
+
+class StaticHTMLRendererTests(TestCase):
+    """
+    Tests specific for Static HTML Renderer
+    """
+    def setUp(self):
+        self.renderer = StaticHTMLRenderer()
+
+    def test_static_renderer(self):
+        data = '<html><body>text</body></html>'
+        result = self.renderer.render(data)
+        assert result == data
+
+    def test_static_renderer_with_exception(self):
+        context = {
+            'response': Response(status=500, exception=True),
+            'request': Request(HttpRequest())
+        }
+        result = self.renderer.render({}, renderer_context=context)
+        assert result == '500 Internal Server Error'
+
+
+class BrowsableAPIRendererTests(TestCase):
+
+    def setUp(self):
+        self.renderer = BrowsableAPIRenderer()
+
+    def test_get_description_returns_empty_string_for_401_and_403_statuses(self):
+        assert self.renderer.get_description({}, status_code=401) == ''
+        assert self.renderer.get_description({}, status_code=403) == ''
+
+    def test_get_filter_form_returns_none_if_data_is_not_list_instance(self):
+        class DummyView(object):
+            get_queryset = None
+            filter_backends = None
+
+        result = self.renderer.get_filter_form(data='not list',
+                                               view=DummyView(), request={})
+        assert result is None
+
+
+class AdminRendererTests(TestCase):
+
+    def setUp(self):
+        self.renderer = AdminRenderer()
+
+    def test_render_when_resource_created(self):
+        class DummyView(APIView):
+            renderer_classes = (AdminRenderer, )
+        request = Request(HttpRequest())
+        request.build_absolute_uri = lambda: 'http://example.com'
+        response = Response(status=201, headers={'Location': '/test'})
+        context = {
+            'view': DummyView(),
+            'request': request,
+            'response': response
+        }
+
+        result = self.renderer.render(data={'test': 'test'},
+                                      renderer_context=context)
+        assert result == ''
+        assert response.status_code == status.HTTP_303_SEE_OTHER
+        assert response['Location'] == 'http://example.com'
+
+    def test_render_dict(self):
+        factory = APIRequestFactory()
+
+        class DummyView(APIView):
+            renderer_classes = (AdminRenderer, )
+
+            def get(self, request):
+                return Response({'foo': 'a string'})
+        view = DummyView.as_view()
+        request = factory.get('/')
+        response = view(request)
+        response.render()
+        self.assertContains(response, '<tr><th>Foo</th><td>a string</td></tr>', html=True)
+
+    def test_render_dict_with_items_key(self):
+        factory = APIRequestFactory()
+
+        class DummyView(APIView):
+            renderer_classes = (AdminRenderer, )
+
+            def get(self, request):
+                return Response({'items': 'a string'})
+
+        view = DummyView.as_view()
+        request = factory.get('/')
+        response = view(request)
+        response.render()
+        self.assertContains(response, '<tr><th>Items</th><td>a string</td></tr>', html=True)
+
+    def test_render_dict_with_iteritems_key(self):
+        factory = APIRequestFactory()
+
+        class DummyView(APIView):
+            renderer_classes = (AdminRenderer, )
+
+            def get(self, request):
+                return Response({'iteritems': 'a string'})
+
+        view = DummyView.as_view()
+        request = factory.get('/')
+        response = view(request)
+        response.render()
+        self.assertContains(response, '<tr><th>Iteritems</th><td>a string</td></tr>', html=True)
+
+
+class TestDocumentationRenderer(TestCase):
+
+    def test_document_with_link_named_data(self):
+        """
+        Ref #5395: Doc's `document.data` would fail with a Link named "data".
+            As per #4972, use templatetag instead.
+        """
+        document = coreapi.Document(
+            title='Data Endpoint API',
+            url='https://api.example.org/',
+            content={
+                'data': coreapi.Link(
+                    url='/data/',
+                    action='get',
+                    fields=[],
+                    description='Return data.'
+                )
+            }
+        )
+
+        factory = APIRequestFactory()
+        request = factory.get('/')
+
+        renderer = DocumentationRenderer()
+
+        html = renderer.render(document, accepted_media_type="text/html", renderer_context={"request": request})
+        assert '<h1>Data Endpoint API</h1>' in html
+
+
+class TestSchemaJSRenderer(TestCase):
+
+    def test_schemajs_output(self):
+        """
+        Test output of the SchemaJS renderer as per #5608. Django 2.0 on Py3 prints binary data as b'xyz' in templates,
+        and the base64 encoding used by SchemaJSRenderer outputs base64 as binary. Test fix.
+        """
+        factory = APIRequestFactory()
+        request = factory.get('/')
+
+        renderer = SchemaJSRenderer()
+
+        output = renderer.render('data', renderer_context={"request": request})
+        assert "'ImRhdGEi'" in output
+        assert "'b'ImRhdGEi''" not in output

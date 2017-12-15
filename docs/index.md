@@ -1,11 +1,37 @@
+<style>
+.promo li a {
+    float: left;
+    width: 130px;
+    height: 20px;
+    text-align: center;
+    margin: 10px 30px;
+    padding: 150px 0 0 0;
+    background-position: 0 50%;
+    background-size: 130px auto;
+    background-repeat: no-repeat;
+    font-size: 120%;
+    color: black;
+}
+.promo li {
+    list-style: none;
+}
+</style>
+
 <p class="badges" height=20px>
-<iframe src="http://ghbtns.com/github-btn.html?user=tomchristie&amp;repo=django-rest-framework&amp;type=watch&amp;count=true" class="github-star-button" allowtransparency="true" frameborder="0" scrolling="0" width="110px" height="20px"></iframe>
+    <iframe src="http://ghbtns.com/github-btn.html?user=encode&amp;repo=django-rest-framework&amp;type=watch&amp;count=true" class="github-star-button" allowtransparency="true" frameborder="0" scrolling="0" width="110px" height="20px"></iframe>
 
-<a href="https://twitter.com/share" class="twitter-share-button" data-url="django-rest-framework.org" data-text="Checking out the totally awesome Django REST framework! http://www.django-rest-framework.org" data-count="none"></a>
-<script>!function(d,s,id){var js,fjs=d.getElementsByTagName(s)[0];if(!d.getElementById(id)){js=d.createElement(s);js.id=id;js.src="http://platform.twitter.com/widgets.js";fjs.parentNode.insertBefore(js,fjs);}}(document,"script","twitter-wjs");</script>
+    <a href="http://travis-ci.org/encode/django-rest-framework?branch=master">
+        <img src="https://secure.travis-ci.org/encode/django-rest-framework.svg?branch=master" class="status-badge">
+    </a>
 
-<img src="https://secure.travis-ci.org/tomchristie/django-rest-framework.png?branch=master" class="travis-build-image">
+    <a href="https://pypi.python.org/pypi/djangorestframework">
+        <img src="https://img.shields.io/pypi/v/djangorestframework.svg" class="status-badge">
+    </a>
 </p>
+
+---
+
+**Note**: This is the documentation for the **version 3** of REST framework. Documentation for [version 2](http://tomchristie.github.io/rest-framework-2-docs/) is also available.
 
 ---
 
@@ -22,47 +48,54 @@
 <img alt="Django REST Framework" title="Logo by Jake 'Sid' Smith" src="img/logo.png" width="600px" style="display: block; margin: 0 auto 0 auto">
 </p>
 
-<!--
-# Django REST framework
--->
-
-Django REST framework is a powerful and flexible toolkit that makes it easy to build Web APIs.
+Django REST framework is a powerful and flexible toolkit for building Web APIs.
 
 Some reasons you might want to use REST framework:
 
-* The [Web browseable API][sandbox] is a huge usability win for your developers.
-* [Authentication policies][authentication] including [OAuth1a][oauth1-section] and [OAuth2][oauth2-section] out of the box.
+* The [Web browsable API][sandbox] is a huge usability win for your developers.
+* [Authentication policies][authentication] including packages for [OAuth1a][oauth1-section] and [OAuth2][oauth2-section].
 * [Serialization][serializers] that supports both [ORM][modelserializer-section] and [non-ORM][serializer-section] data sources.
 * Customizable all the way down - just use [regular function-based views][functionview-section] if you don't need the [more][generic-views] [powerful][viewsets] [features][routers].
 * [Extensive documentation][index], and [great community support][group].
-* Used and trusted by large companies such as [Mozilla][mozilla] and [Eventbrite][eventbrite].
+* Used and trusted by internationally recognised companies including [Mozilla][mozilla], [Red Hat][redhat], [Heroku][heroku], and [Eventbrite][eventbrite].
 
 ---
 
-![Screenshot][image]
+## Funding
 
-**Above**: *Screenshot from the browsable API*
+REST framework is a *collaboratively funded project*. If you use
+REST framework commercially we strongly encourage you to invest in its
+continued development by **[signing up for a paid plan][funding]**.
 
-----
+*Every single sign-up helps us make REST framework long-term financially sustainable.*
+
+<ul class="premium-promo promo">
+    <li><a href="http://jobs.rover.com/" style="background-image: url(https://fund-rest-framework.s3.amazonaws.com/rover_130x130.png)">Rover.com</a></li>
+    <li><a href="https://getsentry.com/welcome/" style="background-image: url(https://fund-rest-framework.s3.amazonaws.com/sentry130.png)">Sentry</a></li>
+    <li><a href="https://getstream.io/try-the-api/?utm_source=drf&utm_medium=banner&utm_campaign=drf" style="background-image: url(https://fund-rest-framework.s3.amazonaws.com/stream-130.png)">Stream</a></li>
+    <li><a href="https://hello.machinalis.co.uk/" style="background-image: url(https://fund-rest-framework.s3.amazonaws.com/Machinalis130.png)">Machinalis</a></li>
+    <li><a href="https://rollbar.com" style="background-image: url(https://fund-rest-framework.s3.amazonaws.com/rollbar2.png)">Rollbar</a></li>
+</ul>
+<div style="clear: both; padding-bottom: 20px;"></div>
+
+*Many thanks to all our [wonderful sponsors][sponsors], and in particular to our premium backers, [Rover](http://jobs.rover.com/), [Sentry](https://getsentry.com/welcome/), [Stream](https://getstream.io/?utm_source=drf&utm_medium=banner&utm_campaign=drf), [Machinalis](https://hello.machinalis.co.uk/), and [Rollbar](https://rollbar.com).*
+
+---
 
 ## Requirements
 
 REST framework requires the following:
 
-* Python (2.6.5+, 2.7, 3.2, 3.3)
-* Django (1.4.2+, 1.5, 1.6, 1.7)
+* Python (2.7, 3.2, 3.3, 3.4, 3.5, 3.6)
+* Django (1.10, 1.11, 2.0 alpha)
 
 The following packages are optional:
 
+* [coreapi][coreapi] (1.32.0+) - Schema generation support.
 * [Markdown][markdown] (2.1.0+) - Markdown support for the browsable API.
-* [PyYAML][yaml] (3.10+) - YAML content-type support.
-* [defusedxml][defusedxml] (0.3+) - XML content-type support.
-* [django-filter][django-filter] (0.5.4+) - Filtering support.
-* [django-oauth-plus][django-oauth-plus] (2.0+) and [oauth2][oauth2] (1.5.211+) - OAuth 1.0a support.
-* [django-oauth2-provider][django-oauth2-provider] (0.2.3+) - OAuth 2.0 support.
+* [django-filter][django-filter] (1.0.1+) - Filtering support.
+* [django-crispy-forms][django-crispy-forms] - Improved HTML display for filtering.
 * [django-guardian][django-guardian] (1.1.1+) - Object level permissions support.
-
-**Note**: The `oauth2` Python package is badly misnamed, and actually provides OAuth 1.0a support.  Also note that packages required for both OAuth 1.0a, and OAuth 2.0 are not yet Python 3 compatible.
 
 ## Installation
 
@@ -74,7 +107,7 @@ Install using `pip`, including any optional packages you want...
 
 ...or clone the project from github.
 
-    git clone git@github.com:tomchristie/django-rest-framework.git
+    git clone git@github.com:encode/django-rest-framework.git
 
 Add `'rest_framework'` to your `INSTALLED_APPS` setting.
 
@@ -85,12 +118,12 @@ Add `'rest_framework'` to your `INSTALLED_APPS` setting.
 
 If you're intending to use the browsable API you'll probably also want to add REST framework's login and logout views.  Add the following to your root `urls.py` file.
 
-    urlpatterns = patterns('',
+    urlpatterns = [
         ...
-        url(r'^api-auth/', include('rest_framework.urls', namespace='rest_framework'))
-    )
+        url(r'^api-auth/', include('rest_framework.urls'))
+    ]
 
-Note that the URL path can be whatever you want, but you must include `'rest_framework.urls'` with the `'rest_framework'` namespace.
+Note that the URL path can be whatever you want.
 
 ## Example
 
@@ -133,7 +166,7 @@ Here's our project's root `urls.py` module:
     router.register(r'users', UserViewSet)
 
     # Wire up our API using automatic URL routing.
-    # Additionally, we include login URLs for the browseable API.
+    # Additionally, we include login URLs for the browsable API.
     urlpatterns = [
         url(r'^', include(router.urls)),
         url(r'^api-auth/', include('rest_framework.urls', namespace='rest_framework'))
@@ -151,10 +184,11 @@ The tutorial will walk you through the building blocks that make up REST framewo
 
 * [1 - Serialization][tut-1]
 * [2 - Requests & Responses][tut-2]
-* [3 - Class based views][tut-3]
+* [3 - Class-based views][tut-3]
 * [4 - Authentication & permissions][tut-4]
 * [5 - Relationships & hyperlinked APIs][tut-5]
 * [6 - Viewsets & routers][tut-6]
+* [7 - Schemas & client libraries][tut-7]
 
 There is a live example API of the finished tutorial API for testing purposes, [available here][sandbox].
 
@@ -173,12 +207,16 @@ The API guide is your complete reference manual to all the functionality provide
 * [Serializers][serializers]
 * [Serializer fields][fields]
 * [Serializer relations][relations]
+* [Validators][validators]
 * [Authentication][authentication]
 * [Permissions][permissions]
 * [Throttling][throttling]
 * [Filtering][filtering]
 * [Pagination][pagination]
+* [Versioning][versioning]
 * [Content negotiation][contentnegotiation]
+* [Metadata][metadata]
+* [Schemas][schemas]
 * [Format suffixes][formatsuffixes]
 * [Returning URLs][reverse]
 * [Exceptions][exceptions]
@@ -191,19 +229,30 @@ The API guide is your complete reference manual to all the functionality provide
 General guides to using REST framework.
 
 * [Documenting your API][documenting-your-api]
+* [API Clients][api-clients]
+* [Internationalization][internationalization]
 * [AJAX, CSRF & CORS][ajax-csrf-cors]
+* [HTML & Forms][html-and-forms]
 * [Browser enhancements][browser-enhancements]
 * [The Browsable API][browsableapi]
 * [REST, Hypermedia & HATEOAS][rest-hypermedia-hateoas]
-* [Third Party Resources][third-party-resources]
+* [Third Party Packages][third-party-packages]
+* [Tutorials and Resources][tutorials-and-resources]
 * [Contributing to REST framework][contributing]
-* [2.0 Announcement][rest-framework-2-announcement]
-* [2.2 Announcement][2.2-announcement]
-* [2.3 Announcement][2.3-announcement]
-* [2.4 Announcement][2.4-announcement]
+* [Project management][project-management]
+* [3.0 Announcement][3.0-announcement]
+* [3.1 Announcement][3.1-announcement]
+* [3.2 Announcement][3.2-announcement]
+* [3.3 Announcement][3.3-announcement]
+* [3.4 Announcement][3.4-announcement]
+* [3.5 Announcement][3.5-announcement]
+* [3.6 Announcement][3.6-announcement]
+* [3.7 Announcement][3.7-announcement]
 * [Kickstarter Announcement][kickstarter-announcement]
+* [Mozilla Grant][mozilla-grant]
+* [Funding][funding]
 * [Release Notes][release-notes]
-* [Credits][credits]
+* [Jobs][jobs]
 
 ## Development
 
@@ -215,7 +264,7 @@ Framework.
 
 For support please see the [REST framework discussion group][group], try the  `#restframework` channel on `irc.freenode.net`, search [the IRC archives][botbot], or raise a  question on [Stack Overflow][stack-overflow], making sure to include the ['django-rest-framework'][django-rest-framework-tag] tag.
 
-[Paid support is available][paid-support] from [DabApps][dabapps], and can include work on REST framework core, or support with building your REST framework API.  Please [contact DabApps][contact-dabapps] if you'd like to discuss commercial support options.
+For priority support please sign up for a [professional or premium sponsorship plan](https://fund.django-rest-framework.org/topics/funding/).
 
 For updates on REST framework development, you may also want to follow [the author][twitter] on Twitter.
 
@@ -230,7 +279,7 @@ Send a description of the issue via email to [rest-framework-security@googlegrou
 
 ## License
 
-Copyright (c) 2011-2014, Tom Christie
+Copyright (c) 2011-2017, Tom Christie
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -253,27 +302,25 @@ CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
 OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-[travis]: http://travis-ci.org/tomchristie/django-rest-framework?branch=master
-[travis-build-image]: https://secure.travis-ci.org/tomchristie/django-rest-framework.png?branch=master
 [mozilla]: http://www.mozilla.org/en-US/about/
+[redhat]: https://www.redhat.com/
+[heroku]: https://www.heroku.com/
 [eventbrite]: https://www.eventbrite.co.uk/about/
+[coreapi]: http://pypi.python.org/pypi/coreapi/
 [markdown]: http://pypi.python.org/pypi/Markdown/
-[yaml]: http://pypi.python.org/pypi/PyYAML
-[defusedxml]: https://pypi.python.org/pypi/defusedxml
 [django-filter]: http://pypi.python.org/pypi/django-filter
-[oauth2]: https://github.com/simplegeo/python-oauth2
-[django-oauth-plus]: https://bitbucket.org/david/django-oauth-plus/wiki/Home
-[django-oauth2-provider]: https://github.com/caffeinehit/django-oauth2-provider
-[django-guardian]: https://github.com/lukaszb/django-guardian
-[0.4]: https://github.com/tomchristie/django-rest-framework/tree/0.4.X
+[django-crispy-forms]: https://github.com/maraujop/django-crispy-forms
+[django-guardian]: https://github.com/django-guardian/django-guardian
+[0.4]: https://github.com/encode/django-rest-framework/tree/0.4.X
 [image]: img/quickstart.png
 [index]: .
-[oauth1-section]: api-guide/authentication#oauthauthentication
-[oauth2-section]: api-guide/authentication#oauth2authentication
+[oauth1-section]: api-guide/authentication/#django-rest-framework-oauth
+[oauth2-section]: api-guide/authentication/#django-oauth-toolkit
 [serializer-section]: api-guide/serializers#serializers
 [modelserializer-section]: api-guide/serializers#modelserializer
 [functionview-section]: api-guide/views#function-based-views
 [sandbox]: http://restframework.herokuapp.com/
+[sponsors]: https://fund.django-rest-framework.org/topics/funding/#our-sponsors
 
 [quickstart]: tutorial/quickstart.md
 [tut-1]: tutorial/1-serialization.md
@@ -282,6 +329,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 [tut-4]: tutorial/4-authentication-and-permissions.md
 [tut-5]: tutorial/5-relationships-and-hyperlinked-apis.md
 [tut-6]: tutorial/6-viewsets-and-routers.md
+[tut-7]: tutorial/7-schemas-and-client-libraries.md
 
 [request]: api-guide/requests.md
 [response]: api-guide/responses.md
@@ -294,12 +342,16 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 [serializers]: api-guide/serializers.md
 [fields]: api-guide/fields.md
 [relations]: api-guide/relations.md
+[validators]: api-guide/validators.md
 [authentication]: api-guide/authentication.md
 [permissions]: api-guide/permissions.md
 [throttling]: api-guide/throttling.md
 [filtering]: api-guide/filtering.md
 [pagination]: api-guide/pagination.md
+[versioning]: api-guide/versioning.md
 [contentnegotiation]: api-guide/content-negotiation.md
+[metadata]: api-guide/metadata.md
+[schemas]: api-guide/schemas.md
 [formatsuffixes]: api-guide/format-suffixes.md
 [reverse]: api-guide/reverse.md
 [exceptions]: api-guide/exceptions.md
@@ -308,19 +360,30 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 [settings]: api-guide/settings.md
 
 [documenting-your-api]: topics/documenting-your-api.md
+[api-clients]: topics/api-clients.md
+[internationalization]: topics/internationalization.md
 [ajax-csrf-cors]: topics/ajax-csrf-cors.md
+[html-and-forms]: topics/html-and-forms.md
 [browser-enhancements]: topics/browser-enhancements.md
 [browsableapi]: topics/browsable-api.md
 [rest-hypermedia-hateoas]: topics/rest-hypermedia-hateoas.md
 [contributing]: topics/contributing.md
-[third-party-resources]: topics/third-party-resources.md
-[rest-framework-2-announcement]: topics/rest-framework-2-announcement.md
-[2.2-announcement]: topics/2.2-announcement.md
-[2.3-announcement]: topics/2.3-announcement.md
-[2.4-announcement]: topics/2.4-announcement.md
+[project-management]: topics/project-management.md
+[third-party-packages]: topics/third-party-packages.md
+[tutorials-and-resources]: topics/tutorials-and-resources.md
+[3.0-announcement]: topics/3.0-announcement.md
+[3.1-announcement]: topics/3.1-announcement.md
+[3.2-announcement]: topics/3.2-announcement.md
+[3.3-announcement]: topics/3.3-announcement.md
+[3.4-announcement]: topics/3.4-announcement.md
+[3.5-announcement]: topics/3.5-announcement.md
+[3.6-announcement]: topics/3.6-announcement.md
+[3.7-announcement]: topics/3.7-announcement.md
 [kickstarter-announcement]: topics/kickstarter-announcement.md
+[mozilla-grant]: topics/mozilla-grant.md
+[funding]: topics/funding.md
 [release-notes]: topics/release-notes.md
-[credits]: topics/credits.md
+[jobs]: topics/jobs.md
 
 [tox]: http://testrun.org/tox/latest/
 

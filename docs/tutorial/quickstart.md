@@ -19,18 +19,44 @@ Create a new Django project named `tutorial`, then start a new app called `quick
     pip install djangorestframework
 
     # Set up a new project with a single application
-    django-admin.py startproject tutorial .
+    django-admin.py startproject tutorial .  # Note the trailing '.' character
     cd tutorial
     django-admin.py startapp quickstart
-	cd ..
+    cd ..
+
+The project layout should look like:
+
+    $ pwd
+    <some path>/tutorial
+    $ find .
+    .
+    ./manage.py
+    ./tutorial
+    ./tutorial/__init__.py
+    ./tutorial/quickstart
+    ./tutorial/quickstart/__init__.py
+    ./tutorial/quickstart/admin.py
+    ./tutorial/quickstart/apps.py
+    ./tutorial/quickstart/migrations
+    ./tutorial/quickstart/migrations/__init__.py
+    ./tutorial/quickstart/models.py
+    ./tutorial/quickstart/tests.py
+    ./tutorial/quickstart/views.py
+    ./tutorial/settings.py
+    ./tutorial/urls.py
+    ./tutorial/wsgi.py
+
+It may look unusual that the application has been created within the project directory. Using the project's namespace avoids name clashes with external module (topic goes outside the scope of the quickstart).
 
 Now sync your database for the first time:
 
-    python manage.py syncdb
+    python manage.py migrate
 
-Make sure to create an initial user named `admin` with a password of `password`. We'll authenticate as that user later in our example.
+We'll also create an initial user named `admin` with a password of `password123`. We'll authenticate as that user later in our example.
 
-Once you've set up a database and got everything synced and ready to go, open up the app's directory and we'll get coding...
+    python manage.py createsuperuser --email admin@example.com --username admin
+
+Once you've set up a database and initial user created and ready to go, open up the app's directory and we'll get coding...
 
 ## Serializers
 
@@ -66,7 +92,7 @@ Right, we'd better write some views then.  Open `tutorial/quickstart/views.py` a
         """
         API endpoint that allows users to be viewed or edited.
         """
-        queryset = User.objects.all()
+        queryset = User.objects.all().order_by('-date_joined')
         serializer_class = UserSerializer
 
 
@@ -81,10 +107,6 @@ Rather than write multiple views we're grouping together all the common behavior
 
 We can easily break these down into individual views if we need to, but using viewsets keeps the view logic nicely organized as well as being very concise.
 
-Notice that our viewset classes here are a little different from those in the [frontpage example][readme-example-api], as they include `queryset` and `serializer_class` attributes, instead of a `model` attribute.
-
-For trivial cases you can simply set a `model` attribute on the `ViewSet` class and the serializer and queryset will be automatically generated for you.  Setting the `queryset` and/or `serializer_class` attributes gives you more explicit control of the API behaviour, and is the recommended style for most applications.
-
 ## URLs
 
 Okay, now let's wire up the API URLs.  On to `tutorial/urls.py`...
@@ -98,7 +120,7 @@ Okay, now let's wire up the API URLs.  On to `tutorial/urls.py`...
     router.register(r'groups', views.GroupViewSet)
 
     # Wire up our API using automatic URL routing.
-    # Additionally, we include login URLs for the browseable API.
+    # Additionally, we include login URLs for the browsable API.
     urlpatterns = [
         url(r'^', include(router.urls)),
         url(r'^api-auth/', include('rest_framework.urls', namespace='rest_framework'))
@@ -106,23 +128,18 @@ Okay, now let's wire up the API URLs.  On to `tutorial/urls.py`...
 
 Because we're using viewsets instead of views, we can automatically generate the URL conf for our API, by simply registering the viewsets with a router class.
 
-Again, if we need more control over the API URLs we can simply drop down to using regular class based views, and writing the URL conf explicitly.
+Again, if we need more control over the API URLs we can simply drop down to using regular class-based views, and writing the URL conf explicitly.
 
 Finally, we're including default login and logout views for use with the browsable API.  That's optional, but useful if your API requires authentication and you want to use the browsable API.
 
 ## Settings
 
-We'd also like to set a few global settings.  We'd like to turn on pagination, and we want our API to only be accessible to admin users.  The settings module will be in `tutorial/settings.py`
+Add `'rest_framework'` to `INSTALLED_APPS`. The settings module will be in `tutorial/settings.py`
 
     INSTALLED_APPS = (
         ...
         'rest_framework',
     )
-
-    REST_FRAMEWORK = {
-        'DEFAULT_PERMISSION_CLASSES': ('rest_framework.permissions.IsAdminUser',),
-        'PAGINATE_BY': 10
-    }
 
 Okay, we're done.
 
@@ -132,11 +149,11 @@ Okay, we're done.
 
 We're now ready to test the API we've built.  Let's fire up the server from the command line.
 
-    python ./manage.py runserver
+    python manage.py runserver
 
 We can now access our API, both from the command-line, using tools like `curl`...
 
-    bash: curl -H 'Accept: application/json; indent=4' -u admin:password http://127.0.0.1:8000/users/
+    bash: curl -H 'Accept: application/json; indent=4' -u admin:password123 http://127.0.0.1:8000/users/
     {
         "count": 2,
         "next": null,
@@ -157,7 +174,34 @@ We can now access our API, both from the command-line, using tools like `curl`..
         ]
     }
 
-Or directly through the browser...
+Or using the [httpie][httpie], command line tool...
+
+    bash: http -a admin:password123 http://127.0.0.1:8000/users/
+
+    HTTP/1.1 200 OK
+    ...
+    {
+        "count": 2,
+        "next": null,
+        "previous": null,
+        "results": [
+            {
+                "email": "admin@example.com",
+                "groups": [],
+                "url": "http://localhost:8000/users/1/",
+                "username": "paul"
+            },
+            {
+                "email": "tom@example.com",
+                "groups": [                ],
+                "url": "http://127.0.0.1:8000/users/2/",
+                "username": "tom"
+            }
+        ]
+    }
+
+
+Or directly through the browser, by going to the URL `http://127.0.0.1:8000/users/`...
 
 ![Quick start image][image]
 
@@ -171,3 +215,4 @@ If you want to get a more in depth understanding of how REST framework fits toge
 [image]: ../img/quickstart.png
 [tutorial]: 1-serialization.md
 [guide]: ../#api-guide
+[httpie]: https://github.com/jakubroztocil/httpie#installation

@@ -1,17 +1,111 @@
 from __future__ import unicode_literals
-from django.conf.urls import patterns, url, include
-from django.db import models
-from django.test import TestCase
+
+from collections import namedtuple
+
+import pytest
+from django.conf.urls import include, url
 from django.core.exceptions import ImproperlyConfigured
-from rest_framework import serializers, viewsets, mixins, permissions
+from django.db import models
+from django.test import TestCase, override_settings
+from django.urls import resolve
+
+from rest_framework import permissions, serializers, viewsets
+from rest_framework.compat import get_regex_pattern
 from rest_framework.decorators import detail_route, list_route
 from rest_framework.response import Response
-from rest_framework.routers import SimpleRouter, DefaultRouter
+from rest_framework.routers import DefaultRouter, SimpleRouter
 from rest_framework.test import APIRequestFactory
+from rest_framework.utils import json
 
 factory = APIRequestFactory()
 
-urlpatterns = patterns('',)
+
+class RouterTestModel(models.Model):
+    uuid = models.CharField(max_length=20)
+    text = models.CharField(max_length=200)
+
+
+class NoteSerializer(serializers.HyperlinkedModelSerializer):
+    url = serializers.HyperlinkedIdentityField(view_name='routertestmodel-detail', lookup_field='uuid')
+
+    class Meta:
+        model = RouterTestModel
+        fields = ('url', 'uuid', 'text')
+
+
+class NoteViewSet(viewsets.ModelViewSet):
+    queryset = RouterTestModel.objects.all()
+    serializer_class = NoteSerializer
+    lookup_field = 'uuid'
+
+
+class KWargedNoteViewSet(viewsets.ModelViewSet):
+    queryset = RouterTestModel.objects.all()
+    serializer_class = NoteSerializer
+    lookup_field = 'text__contains'
+    lookup_url_kwarg = 'text'
+
+
+class MockViewSet(viewsets.ModelViewSet):
+    queryset = None
+    serializer_class = None
+
+
+class EmptyPrefixSerializer(serializers.HyperlinkedModelSerializer):
+    class Meta:
+        model = RouterTestModel
+        fields = ('uuid', 'text')
+
+
+class EmptyPrefixViewSet(viewsets.ModelViewSet):
+    queryset = [RouterTestModel(id=1, uuid='111', text='First'), RouterTestModel(id=2, uuid='222', text='Second')]
+    serializer_class = EmptyPrefixSerializer
+
+    def get_object(self, *args, **kwargs):
+        index = int(self.kwargs['pk']) - 1
+        return self.queryset[index]
+
+
+class RegexUrlPathViewSet(viewsets.ViewSet):
+    @list_route(url_path='list/(?P<kwarg>[0-9]{4})')
+    def regex_url_path_list(self, request, *args, **kwargs):
+        kwarg = self.kwargs.get('kwarg', '')
+        return Response({'kwarg': kwarg})
+
+    @detail_route(url_path='detail/(?P<kwarg>[0-9]{4})')
+    def regex_url_path_detail(self, request, *args, **kwargs):
+        pk = self.kwargs.get('pk', '')
+        kwarg = self.kwargs.get('kwarg', '')
+        return Response({'pk': pk, 'kwarg': kwarg})
+
+
+notes_router = SimpleRouter()
+notes_router.register(r'notes', NoteViewSet)
+
+kwarged_notes_router = SimpleRouter()
+kwarged_notes_router.register(r'notes', KWargedNoteViewSet)
+
+namespaced_router = DefaultRouter()
+namespaced_router.register(r'example', MockViewSet, base_name='example')
+
+empty_prefix_router = SimpleRouter()
+empty_prefix_router.register(r'', EmptyPrefixViewSet, base_name='empty_prefix')
+empty_prefix_urls = [
+    url(r'^', include(empty_prefix_router.urls)),
+]
+
+regex_url_path_router = SimpleRouter()
+regex_url_path_router.register(r'', RegexUrlPathViewSet, base_name='regex')
+
+urlpatterns = [
+    url(r'^non-namespaced/', include(namespaced_router.urls)),
+    url(r'^namespaced/', include((namespaced_router.urls, 'example'), namespace='example')),
+    url(r'^example/', include(notes_router.urls)),
+    url(r'^example2/', include(kwarged_notes_router.urls)),
+
+    url(r'^empty-prefix/', include(empty_prefix_urls)),
+    url(r'^regex/', include(regex_url_path_router.urls))
+]
 
 
 class BasicViewSet(viewsets.ViewSet):
@@ -50,8 +144,7 @@ class TestSimpleRouter(TestCase):
         for i, endpoint in enumerate(['action1', 'action2', 'action3', 'link1', 'link2']):
             route = decorator_routes[i]
             # check url listing
-            self.assertEqual(route.url,
-                             '^{{prefix}}/{{lookup}}/{0}{{trailing_slash}}$'.format(endpoint))
+            assert route.url == '^{{prefix}}/{{lookup}}/{0}{{trailing_slash}}$'.format(endpoint)
             # check method to function mapping
             if endpoint == 'action3':
                 methods_map = ['post', 'delete']
@@ -60,68 +153,48 @@ class TestSimpleRouter(TestCase):
             else:
                 methods_map = ['get']
             for method in methods_map:
-                self.assertEqual(route.mapping[method], endpoint)
+                assert route.mapping[method] == endpoint
 
 
-class RouterTestModel(models.Model):
-    uuid = models.CharField(max_length=20)
-    text = models.CharField(max_length=200)
+@override_settings(ROOT_URLCONF='tests.test_routers')
+class TestRootView(TestCase):
+    def test_retrieve_namespaced_root(self):
+        response = self.client.get('/namespaced/')
+        assert response.data == {"example": "http://testserver/namespaced/example/"}
+
+    def test_retrieve_non_namespaced_root(self):
+        response = self.client.get('/non-namespaced/')
+        assert response.data == {"example": "http://testserver/non-namespaced/example/"}
 
 
+@override_settings(ROOT_URLCONF='tests.test_routers')
 class TestCustomLookupFields(TestCase):
     """
     Ensure that custom lookup fields are correctly routed.
     """
-    urls = 'tests.test_routers'
-
     def setUp(self):
-        class NoteSerializer(serializers.HyperlinkedModelSerializer):
-            class Meta:
-                model = RouterTestModel
-                lookup_field = 'uuid'
-                fields = ('url', 'uuid', 'text')
-
-        class NoteViewSet(viewsets.ModelViewSet):
-            queryset = RouterTestModel.objects.all()
-            serializer_class = NoteSerializer
-            lookup_field = 'uuid'
-
         RouterTestModel.objects.create(uuid='123', text='foo bar')
-
-        self.router = SimpleRouter()
-        self.router.register(r'notes', NoteViewSet)
-
-        from tests import test_routers
-        urls = getattr(test_routers, 'urlpatterns')
-        urls += patterns(
-            '',
-            url(r'^', include(self.router.urls)),
-        )
+        RouterTestModel.objects.create(uuid='a b', text='baz qux')
 
     def test_custom_lookup_field_route(self):
-        detail_route = self.router.urls[-1]
-        detail_url_pattern = detail_route.regex.pattern
-        self.assertIn('<uuid>', detail_url_pattern)
+        detail_route = notes_router.urls[-1]
+        detail_url_pattern = get_regex_pattern(detail_route)
+        assert '<uuid>' in detail_url_pattern
 
     def test_retrieve_lookup_field_list_view(self):
-        response = self.client.get('/notes/')
-        self.assertEqual(
-            response.data,
-            [{
-                "url": "http://testserver/notes/123/",
-                "uuid": "123", "text": "foo bar"
-            }]
-        )
+        response = self.client.get('/example/notes/')
+        assert response.data == [
+            {"url": "http://testserver/example/notes/123/", "uuid": "123", "text": "foo bar"},
+            {"url": "http://testserver/example/notes/a%20b/", "uuid": "a b", "text": "baz qux"},
+        ]
 
     def test_retrieve_lookup_field_detail_view(self):
-        response = self.client.get('/notes/123/')
-        self.assertEqual(
-            response.data,
-            {
-                "url": "http://testserver/notes/123/",
-                "uuid": "123", "text": "foo bar"
-            }
-        )
+        response = self.client.get('/example/notes/123/')
+        assert response.data == {"url": "http://testserver/example/notes/123/", "uuid": "123", "text": "foo bar"}
+
+    def test_retrieve_lookup_field_url_encoded_detail_view_(self):
+        response = self.client.get('/example/notes/a%20b/')
+        assert response.data == {"url": "http://testserver/example/notes/a%20b/", "uuid": "a b", "text": "baz qux"}
 
 
 class TestLookupValueRegex(TestCase):
@@ -142,13 +215,37 @@ class TestLookupValueRegex(TestCase):
     def test_urls_limited_by_lookup_value_regex(self):
         expected = ['^notes/$', '^notes/(?P<uuid>[0-9a-f]{32})/$']
         for idx in range(len(expected)):
-            self.assertEqual(expected[idx], self.urls[idx].regex.pattern)
+            assert expected[idx] == get_regex_pattern(self.urls[idx])
+
+
+@override_settings(ROOT_URLCONF='tests.test_routers')
+class TestLookupUrlKwargs(TestCase):
+    """
+    Ensure the router honors lookup_url_kwarg.
+
+    Setup a deep lookup_field, but map it to a simple URL kwarg.
+    """
+    def setUp(self):
+        RouterTestModel.objects.create(uuid='123', text='foo bar')
+
+    def test_custom_lookup_url_kwarg_route(self):
+        detail_route = kwarged_notes_router.urls[-1]
+        detail_url_pattern = get_regex_pattern(detail_route)
+        assert '^notes/(?P<text>' in detail_url_pattern
+
+    def test_retrieve_lookup_url_kwarg_detail_view(self):
+        response = self.client.get('/example2/notes/fo/')
+        assert response.data == {"url": "http://testserver/example/notes/123/", "uuid": "123", "text": "foo bar"}
+
+    def test_retrieve_lookup_url_encoded_kwarg_detail_view(self):
+        response = self.client.get('/example2/notes/foo%20bar/')
+        assert response.data == {"url": "http://testserver/example/notes/123/", "uuid": "123", "text": "foo bar"}
 
 
 class TestTrailingSlashIncluded(TestCase):
     def setUp(self):
         class NoteViewSet(viewsets.ModelViewSet):
-            model = RouterTestModel
+            queryset = RouterTestModel.objects.all()
 
         self.router = SimpleRouter()
         self.router.register(r'notes', NoteViewSet)
@@ -157,13 +254,13 @@ class TestTrailingSlashIncluded(TestCase):
     def test_urls_have_trailing_slash_by_default(self):
         expected = ['^notes/$', '^notes/(?P<pk>[^/.]+)/$']
         for idx in range(len(expected)):
-            self.assertEqual(expected[idx], self.urls[idx].regex.pattern)
+            assert expected[idx] == get_regex_pattern(self.urls[idx])
 
 
 class TestTrailingSlashRemoved(TestCase):
     def setUp(self):
         class NoteViewSet(viewsets.ModelViewSet):
-            model = RouterTestModel
+            queryset = RouterTestModel.objects.all()
 
         self.router = SimpleRouter(trailing_slash=False)
         self.router.register(r'notes', NoteViewSet)
@@ -172,13 +269,14 @@ class TestTrailingSlashRemoved(TestCase):
     def test_urls_can_have_trailing_slash_removed(self):
         expected = ['^notes$', '^notes/(?P<pk>[^/.]+)$']
         for idx in range(len(expected)):
-            self.assertEqual(expected[idx], self.urls[idx].regex.pattern)
+            assert expected[idx] == get_regex_pattern(self.urls[idx])
 
 
 class TestNameableRoot(TestCase):
     def setUp(self):
         class NoteViewSet(viewsets.ModelViewSet):
-            model = RouterTestModel
+            queryset = RouterTestModel.objects.all()
+
         self.router = DefaultRouter()
         self.router.root_view_name = 'nameable-root'
         self.router.register(r'notes', NoteViewSet)
@@ -186,7 +284,7 @@ class TestNameableRoot(TestCase):
 
     def test_router_has_custom_name(self):
         expected = 'nameable-root'
-        self.assertEqual(expected, self.urls[0].name)
+        assert expected == self.urls[-1].name
 
 
 class TestActionKeywordArgs(TestCase):
@@ -212,10 +310,7 @@ class TestActionKeywordArgs(TestCase):
     def test_action_kwargs(self):
         request = factory.post('/test/0/custom/')
         response = self.view(request)
-        self.assertEqual(
-            response.data,
-            {'permission_classes': [permissions.AllowAny]}
-        )
+        assert response.data == {'permission_classes': [permissions.AllowAny]}
 
 
 class TestActionAppliedToExistingRoute(TestCase):
@@ -236,7 +331,7 @@ class TestActionAppliedToExistingRoute(TestCase):
         self.router = SimpleRouter()
         self.router.register(r'test', TestViewSet, base_name='test')
 
-        with self.assertRaises(ImproperlyConfigured):
+        with pytest.raises(ImproperlyConfigured):
             self.router.urls
 
 
@@ -260,43 +355,99 @@ class DynamicListAndDetailViewSet(viewsets.ViewSet):
     def detail_route_get(self, request, *args, **kwargs):
         return Response({'method': 'link2'})
 
+    @list_route(url_path="list_custom-route")
+    def list_custom_route_get(self, request, *args, **kwargs):
+        return Response({'method': 'link1'})
+
+    @detail_route(url_path="detail_custom-route")
+    def detail_custom_route_get(self, request, *args, **kwargs):
+        return Response({'method': 'link2'})
+
+
+class SubDynamicListAndDetailViewSet(DynamicListAndDetailViewSet):
+    pass
+
 
 class TestDynamicListAndDetailRouter(TestCase):
     def setUp(self):
         self.router = SimpleRouter()
 
-    def test_list_and_detail_route_decorators(self):
-        routes = self.router.get_routes(DynamicListAndDetailViewSet)
+    def _test_list_and_detail_route_decorators(self, viewset):
+        routes = self.router.get_routes(viewset)
         decorator_routes = [r for r in routes if not (r.name.endswith('-list') or r.name.endswith('-detail'))]
+
+        MethodNamesMap = namedtuple('MethodNamesMap', 'method_name url_path')
         # Make sure all these endpoints exist and none have been clobbered
-        for i, endpoint in enumerate(['list_route_get', 'list_route_post', 'detail_route_get', 'detail_route_post']):
+        for i, endpoint in enumerate([MethodNamesMap('list_custom_route_get', 'list_custom-route'),
+                                      MethodNamesMap('list_route_get', 'list_route_get'),
+                                      MethodNamesMap('list_route_post', 'list_route_post'),
+                                      MethodNamesMap('detail_custom_route_get', 'detail_custom-route'),
+                                      MethodNamesMap('detail_route_get', 'detail_route_get'),
+                                      MethodNamesMap('detail_route_post', 'detail_route_post')
+                                      ]):
             route = decorator_routes[i]
             # check url listing
-            if endpoint.startswith('list_'):
-                self.assertEqual(route.url,
-                                 '^{{prefix}}/{0}{{trailing_slash}}$'.format(endpoint))
+            method_name = endpoint.method_name
+            url_path = endpoint.url_path
+
+            if method_name.startswith('list_'):
+                assert route.url == '^{{prefix}}/{0}{{trailing_slash}}$'.format(url_path)
             else:
-                self.assertEqual(route.url,
-                                 '^{{prefix}}/{{lookup}}/{0}{{trailing_slash}}$'.format(endpoint))
+                assert route.url == '^{{prefix}}/{{lookup}}/{0}{{trailing_slash}}$'.format(url_path)
             # check method to function mapping
-            if endpoint.endswith('_post'):
+            if method_name.endswith('_post'):
                 method_map = 'post'
             else:
                 method_map = 'get'
-            self.assertEqual(route.mapping[method_map], endpoint)
+            assert route.mapping[method_map] == method_name
+
+    def test_list_and_detail_route_decorators(self):
+        self._test_list_and_detail_route_decorators(DynamicListAndDetailViewSet)
+
+    def test_inherited_list_and_detail_route_decorators(self):
+        self._test_list_and_detail_route_decorators(SubDynamicListAndDetailViewSet)
 
 
-class TestRootWithAListlessViewset(TestCase):
-    def setUp(self):
-        class NoteViewSet(mixins.RetrieveModelMixin,
-                          viewsets.GenericViewSet):
-            model = RouterTestModel
+@override_settings(ROOT_URLCONF='tests.test_routers')
+class TestEmptyPrefix(TestCase):
+    def test_empty_prefix_list(self):
+        response = self.client.get('/empty-prefix/')
+        assert response.status_code == 200
+        assert json.loads(response.content.decode('utf-8')) == [{'uuid': '111', 'text': 'First'},
+                                                                {'uuid': '222', 'text': 'Second'}]
 
-        self.router = DefaultRouter()
-        self.router.register(r'notes', NoteViewSet)
-        self.view = self.router.urls[0].callback
+    def test_empty_prefix_detail(self):
+        response = self.client.get('/empty-prefix/1/')
+        assert response.status_code == 200
+        assert json.loads(response.content.decode('utf-8')) == {'uuid': '111', 'text': 'First'}
 
-    def test_api_root(self):
-        request = factory.get('/')
-        response = self.view(request)
-        self.assertEqual(response.data, {})
+
+@override_settings(ROOT_URLCONF='tests.test_routers')
+class TestRegexUrlPath(TestCase):
+    def test_regex_url_path_list(self):
+        kwarg = '1234'
+        response = self.client.get('/regex/list/{}/'.format(kwarg))
+        assert response.status_code == 200
+        assert json.loads(response.content.decode('utf-8')) == {'kwarg': kwarg}
+
+    def test_regex_url_path_detail(self):
+        pk = '1'
+        kwarg = '1234'
+        response = self.client.get('/regex/{}/detail/{}/'.format(pk, kwarg))
+        assert response.status_code == 200
+        assert json.loads(response.content.decode('utf-8')) == {'pk': pk, 'kwarg': kwarg}
+
+
+@override_settings(ROOT_URLCONF='tests.test_routers')
+class TestViewInitkwargs(TestCase):
+    def test_suffix(self):
+        match = resolve('/example/notes/')
+        initkwargs = match.func.initkwargs
+
+        assert initkwargs['suffix'] == 'List'
+
+    def test_basename(self):
+        match = resolve('/example/notes/')
+        initkwargs = match.func.initkwargs
+
+        assert initkwargs['basename'] == 'routertestmodel'

@@ -1,4 +1,4 @@
-<a class="github" href="negotiation.py"></a>
+source: negotiation.py
 
 # Content negotiation
 
@@ -29,7 +29,7 @@ The priorities for each of the given media types would be:
 
 If the requested view was only configured with renderers for `YAML` and `HTML`, then REST framework would select whichever renderer was listed first in the `renderer_classes` list or `DEFAULT_RENDERER_CLASSES` setting.
 
-For more information on the `HTTP Accept` header, see [RFC 2616][accept-header] 
+For more information on the `HTTP Accept` header, see [RFC 2616][accept-header]
 
 ---
 
@@ -62,7 +62,7 @@ request when selecting the appropriate parser or renderer.
             Select the first parser in the `.parser_classes` list.
             """
             return parsers[0]
-        
+
         def select_renderer(self, request, renderers, format_suffix):
             """
             Select the first renderer in the `.renderer_classes` list.
@@ -77,7 +77,7 @@ The default content negotiation class may be set globally, using the `DEFAULT_CO
         'DEFAULT_CONTENT_NEGOTIATION_CLASS': 'myapp.negotiation.IgnoreClientContentNegotiation',
     }
 
-You can also set the content negotiation used for an individual view, or viewset, using the `APIView` class based views.
+You can also set the content negotiation used for an individual view, or viewset, using the `APIView` class-based views.
 
 	from myapp.negotiation import IgnoreClientContentNegotiation
     from rest_framework.response import Response

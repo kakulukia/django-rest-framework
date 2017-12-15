@@ -17,7 +17,7 @@ By default, the API will return the format specified by the headers, which in th
 
 ## Customizing
 
-The browsable API is built with [Twitter's Bootstrap][bootstrap] (v 2.1.1), making it easy to customize the look-and-feel.
+The browsable API is built with [Twitter's Bootstrap][bootstrap] (v 3.3.5), making it easy to customize the look-and-feel.
 
 To customize the default style, create a template called `rest_framework/api.html` that extends from `rest_framework/base.html`.  For example:
 
@@ -35,7 +35,7 @@ To replace the default theme, add a `bootstrap_theme` block to your `api.html` a
         <link rel="stylesheet" href="/path/to/my/bootstrap.css" type="text/css">
     {% endblock %}
 
-A suitable replacement theme can be generated using Bootstrap's [Customize Tool][bcustomize].  There are also pre-made themes available at [Bootswatch][bswatch].  To use any of the Bootswatch themes, simply download the theme's `bootstrap.min.css` file, add it to your project, and replace the default one as described above.
+Suitable pre-made replacement themes are available at [Bootswatch][bswatch].  To use any of the Bootswatch themes, simply download the theme's `bootstrap.min.css` file, add it to your project, and replace the default one as described above.
 
 You can also change the navbar variant, which by default is `navbar-inverse`, using the `bootstrap_navbar_variant` block.  The empty `{% block bootstrap_navbar_variant %}{% endblock %}` will use the original Bootstrap navbar style.
 
@@ -75,7 +75,6 @@ All of the blocks available in the browsable API base template that can be used 
 * `bootstrap_navbar_variant`   - CSS class for the navbar.
 * `branding`                   - Branding section of the navbar, see [Bootstrap components][bcomponentsnav].
 * `breadcrumbs`                - Links showing resource nesting, allowing the user to go back up the resources.  It's recommended to preserve these, but they can be overridden using the breadcrumbs block.
-* `footer`                     - Any copyright notices or similar footer materials can go here (by default right-aligned).
 * `script`                     - JavaScript files for the page.
 * `style`                      - CSS stylesheets for the page.
 * `title`                      - Title of the page.
@@ -130,34 +129,22 @@ You can override the `BrowsableAPIRenderer.get_context()` method to customise th
 
 For more advanced customization, such as not having a Bootstrap basis or tighter integration with the rest of your site, you can simply choose not to have `api.html` extend `base.html`.  Then the page content and capabilities are entirely up to you.
 
-#### Autocompletion
+#### Handling `ChoiceField` with large numbers of items.
 
-When a `ChoiceField` has too many items, rendering the widget containing all the options can become very slow, and cause the browsable API rendering to perform poorly.  One solution is to replace the selector by an autocomplete widget, that only loads and renders a subset of the available options as needed.
+When a relationship or `ChoiceField` has too many items, rendering the widget containing all the options can become very slow, and cause the browsable API rendering to perform poorly.
 
-There are [a variety of packages for autocomplete widgets][autocomplete-packages], such as [django-autocomplete-light][django-autocomplete-light].  To setup `django-autocomplete-light`, follow the [installation documentation][django-autocomplete-light-install], add the the following to the `api.html` template:
+The simplest option in this case is to replace the select input with a standard text input. For example:
 
-    {% block script %}
-    {{ block.super }}
-    {% include 'autocomplete_light/static.html' %}
-    {% endblock %}
+     author = serializers.HyperlinkedRelatedField(
+        queryset=User.objects.all(),
+        style={'base_template': 'input.html'}
+    )
 
-You can now add the `autocomplete_light.ChoiceWidget` widget to the serializer field.
+#### Autocomplete
 
-    import autocomplete_light
+An alternative, but more complex option would be to replace the input with an autocomplete widget, that only loads and renders a subset of the available options as needed. If you need to do this you'll need to do some work to build a custom autocomplete HTML template yourself.
 
-    class BookSerializer(serializers.ModelSerializer):
-        author = serializers.ChoiceField(
-            widget=autocomplete_light.ChoiceWidget('AuthorAutocomplete')
-        )
-
-        class Meta:
-            model = Book
-
----
-
-![Autocomplete][autocomplete-image]
-
-*Screenshot of the autocomplete-light widget*
+There are [a variety of packages for autocomplete widgets][autocomplete-packages], such as [django-autocomplete-light][django-autocomplete-light], that you may want to refer to. Note that you will not be able to simply include these components as standard widgets, but will need to write the HTML template explicitly. This is because REST framework 3.0 no longer supports the `widget` keyword argument since it now uses templated HTML generation.
 
 ---
 
@@ -174,5 +161,4 @@ You can now add the `autocomplete_light.ChoiceWidget` widget to the serializer f
 [bcomponentsnav]: http://getbootstrap.com/2.3.2/components.html#navbar
 [autocomplete-packages]: https://www.djangopackages.com/grids/g/auto-complete/
 [django-autocomplete-light]: https://github.com/yourlabs/django-autocomplete-light
-[django-autocomplete-light-install]: http://django-autocomplete-light.readthedocs.org/en/latest/#install
-[autocomplete-image]: ../img/autocomplete.png
+[django-autocomplete-light-install]: https://django-autocomplete-light.readthedocs.io/en/master/install.html

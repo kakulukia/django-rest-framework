@@ -7,18 +7,21 @@ based views, as well as the `@detail_route` and `@list_route` decorators, which 
 used to annotate methods on viewsets that should be included by routers.
 """
 from __future__ import unicode_literals
-from django.utils import six
-from rest_framework.views import APIView
+
 import types
 import warnings
 
+from django.utils import six
 
-def api_view(http_method_names):
+from rest_framework.views import APIView
 
+
+def api_view(http_method_names=None, exclude_from_schema=False):
     """
     Decorator that converts a function-based view into an APIView subclass.
     Takes a list of allowed methods for the view as an argument.
     """
+    http_method_names = ['GET'] if (http_method_names is None) else http_method_names
 
     def decorator(func):
 
@@ -43,7 +46,7 @@ def api_view(http_method_names):
         assert isinstance(http_method_names, (list, tuple)), \
             '@api_view expected a list of strings, received %s' % type(http_method_names).__name__
 
-        allowed_methods = set(http_method_names) | set(('options',))
+        allowed_methods = set(http_method_names) | {'options'}
         WrappedAPIView.http_method_names = [method.lower() for method in allowed_methods]
 
         def handler(self, *args, **kwargs):
@@ -53,6 +56,7 @@ def api_view(http_method_names):
             setattr(WrappedAPIView, method.lower(), handler)
 
         WrappedAPIView.__name__ = func.__name__
+        WrappedAPIView.__module__ = func.__module__
 
         WrappedAPIView.renderer_classes = getattr(func, 'renderer_classes',
                                                   APIView.renderer_classes)
@@ -68,6 +72,17 @@ def api_view(http_method_names):
 
         WrappedAPIView.permission_classes = getattr(func, 'permission_classes',
                                                     APIView.permission_classes)
+
+        WrappedAPIView.schema = getattr(func, 'schema',
+                                        APIView.schema)
+
+        if exclude_from_schema:
+            warnings.warn(
+                "The `exclude_from_schema` argument to `api_view` is pending deprecation. "
+                "Use the `schema` decorator instead, passing `None`.",
+                PendingDeprecationWarning
+            )
+            WrappedAPIView.exclude_from_schema = exclude_from_schema
 
         return WrappedAPIView.as_view()
     return decorator
@@ -108,10 +123,19 @@ def permission_classes(permission_classes):
     return decorator
 
 
-def detail_route(methods=['get'], **kwargs):
+def schema(view_inspector):
+    def decorator(func):
+        func.schema = view_inspector
+        return func
+    return decorator
+
+
+def detail_route(methods=None, **kwargs):
     """
     Used to mark a method on a ViewSet that should be routed for detail requests.
     """
+    methods = ['get'] if (methods is None) else methods
+
     def decorator(func):
         func.bind_to_methods = methods
         func.detail = True
@@ -120,47 +144,15 @@ def detail_route(methods=['get'], **kwargs):
     return decorator
 
 
-def list_route(methods=['get'], **kwargs):
+def list_route(methods=None, **kwargs):
     """
     Used to mark a method on a ViewSet that should be routed for list requests.
     """
+    methods = ['get'] if (methods is None) else methods
+
     def decorator(func):
         func.bind_to_methods = methods
         func.detail = False
         func.kwargs = kwargs
         return func
-    return decorator
-
-
-# These are now pending deprecation, in favor of `detail_route` and `list_route`.
-
-def link(**kwargs):
-    """
-    Used to mark a method on a ViewSet that should be routed for detail GET requests.
-    """
-    msg = 'link is pending deprecation. Use detail_route instead.'
-    warnings.warn(msg, PendingDeprecationWarning, stacklevel=2)
-
-    def decorator(func):
-        func.bind_to_methods = ['get']
-        func.detail = True
-        func.kwargs = kwargs
-        return func
-
-    return decorator
-
-
-def action(methods=['post'], **kwargs):
-    """
-    Used to mark a method on a ViewSet that should be routed for detail POST requests.
-    """
-    msg = 'action is pending deprecation. Use detail_route instead.'
-    warnings.warn(msg, PendingDeprecationWarning, stacklevel=2)
-
-    def decorator(func):
-        func.bind_to_methods = methods
-        func.detail = True
-        func.kwargs = kwargs
-        return func
-
     return decorator

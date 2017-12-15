@@ -1,8 +1,11 @@
 from __future__ import unicode_literals
-from django.core.validators import MaxValueValidator
-from django.core.exceptions import ValidationError
+
+import re
+
+from django.core.validators import MaxValueValidator, RegexValidator
 from django.db import models
 from django.test import TestCase
+
 from rest_framework import generics, serializers, status
 from rest_framework.test import APIRequestFactory
 
@@ -23,21 +26,8 @@ class ValidationModelSerializer(serializers.ModelSerializer):
 
 
 class UpdateValidationModel(generics.RetrieveUpdateDestroyAPIView):
-    model = ValidationModel
+    queryset = ValidationModel.objects.all()
     serializer_class = ValidationModelSerializer
-
-
-class TestPreSaveValidationExclusions(TestCase):
-    def test_pre_save_validation_exclusions(self):
-        """
-        Somewhat weird test case to ensure that we don't perform model
-        validation on read only fields.
-        """
-        obj = ValidationModel.objects.create(blank_validated_field='')
-        request = factory.put('/', {}, format='json')
-        view = UpdateValidationModel().as_view()
-        response = view(request, pk=obj.pk).render()
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
 
 
 # Regression for #653
@@ -49,15 +39,32 @@ class ShouldValidateModel(models.Model):
 class ShouldValidateModelSerializer(serializers.ModelSerializer):
     renamed = serializers.CharField(source='should_validate_field', required=False)
 
-    def validate_renamed(self, attrs, source):
-        value = attrs[source]
+    def validate_renamed(self, value):
         if len(value) < 3:
             raise serializers.ValidationError('Minimum 3 characters.')
-        return attrs
+        return value
 
     class Meta:
         model = ShouldValidateModel
         fields = ('renamed',)
+
+
+class TestNestedValidationError(TestCase):
+    def test_nested_validation_error_detail(self):
+        """
+        Ensure nested validation error detail is rendered correctly.
+        """
+        e = serializers.ValidationError({
+            'nested': {
+                'field': ['error'],
+            }
+        })
+
+        assert serializers.as_serializer_error(e) == {
+            'nested': {
+                'field': ['error'],
+            }
+        }
 
 
 class TestPreSaveValidationExclusionsSerializer(TestCase):
@@ -68,20 +75,20 @@ class TestPreSaveValidationExclusionsSerializer(TestCase):
         # We've set `required=False` on the serializer, but the model
         # does not have `blank=True`, so this serializer should not validate.
         serializer = ShouldValidateModelSerializer(data={'renamed': ''})
-        self.assertEqual(serializer.is_valid(), False)
-        self.assertIn('renamed', serializer.errors)
-        self.assertNotIn('should_validate_field', serializer.errors)
+        assert serializer.is_valid() is False
+        assert 'renamed' in serializer.errors
+        assert 'should_validate_field' not in serializer.errors
 
 
 class TestCustomValidationMethods(TestCase):
     def test_custom_validation_method_is_executed(self):
         serializer = ShouldValidateModelSerializer(data={'renamed': 'fo'})
-        self.assertFalse(serializer.is_valid())
-        self.assertIn('renamed', serializer.errors)
+        assert not serializer.is_valid()
+        assert 'renamed' in serializer.errors
 
     def test_custom_validation_method_passing(self):
         serializer = ShouldValidateModelSerializer(data={'renamed': 'foo'})
-        self.assertTrue(serializer.is_valid())
+        assert serializer.is_valid()
 
 
 class ValidationSerializer(serializers.Serializer):
@@ -101,9 +108,12 @@ class TestAvoidValidation(TestCase):
     """
     def test_serializer_errors_has_only_invalid_data_error(self):
         serializer = ValidationSerializer(data='invalid data')
-        self.assertFalse(serializer.is_valid())
-        self.assertDictEqual(serializer.errors,
-                             {'non_field_errors': ['Invalid data']})
+        assert not serializer.is_valid()
+        assert serializer.errors == {
+            'non_field_errors': [
+                'Invalid data. Expected a dictionary, but got %s.' % type('').__name__
+            ]
+        }
 
 
 # regression tests for issue: 1493
@@ -115,10 +125,11 @@ class ValidationMaxValueValidatorModel(models.Model):
 class ValidationMaxValueValidatorModelSerializer(serializers.ModelSerializer):
     class Meta:
         model = ValidationMaxValueValidatorModel
+        fields = '__all__'
 
 
 class UpdateMaxValueValidationModel(generics.RetrieveUpdateDestroyAPIView):
-    model = ValidationMaxValueValidatorModel
+    queryset = ValidationMaxValueValidatorModel.objects.all()
     serializer_class = ValidationMaxValueValidatorModelSerializer
 
 
@@ -126,28 +137,34 @@ class TestMaxValueValidatorValidation(TestCase):
 
     def test_max_value_validation_serializer_success(self):
         serializer = ValidationMaxValueValidatorModelSerializer(data={'number_value': 99})
-        self.assertTrue(serializer.is_valid())
+        assert serializer.is_valid()
 
     def test_max_value_validation_serializer_fails(self):
         serializer = ValidationMaxValueValidatorModelSerializer(data={'number_value': 101})
-        self.assertFalse(serializer.is_valid())
-        self.assertDictEqual({'number_value': ['Ensure this value is less than or equal to 100.']}, serializer.errors)
+        assert not serializer.is_valid()
+        assert serializer.errors == {
+            'number_value': [
+                'Ensure this value is less than or equal to 100.'
+            ]
+        }
 
     def test_max_value_validation_success(self):
         obj = ValidationMaxValueValidatorModel.objects.create(number_value=100)
         request = factory.patch('/{0}'.format(obj.pk), {'number_value': 98}, format='json')
         view = UpdateMaxValueValidationModel().as_view()
         response = view(request, pk=obj.pk).render()
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        assert response.status_code == status.HTTP_200_OK
 
     def test_max_value_validation_fail(self):
         obj = ValidationMaxValueValidatorModel.objects.create(number_value=100)
         request = factory.patch('/{0}'.format(obj.pk), {'number_value': 101}, format='json')
         view = UpdateMaxValueValidationModel().as_view()
         response = view(request, pk=obj.pk).render()
-        self.assertEqual(response.content, b'{"number_value": ["Ensure this value is less than or equal to 100."]}')
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        assert response.content == b'{"number_value":["Ensure this value is less than or equal to 100."]}'
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
 
+
+# regression tests for issue: 1533
 
 class TestChoiceFieldChoicesValidate(TestCase):
     CHOICES = [
@@ -155,6 +172,8 @@ class TestChoiceFieldChoicesValidate(TestCase):
         (1, 'Medium'),
         (2, 'Large'),
     ]
+
+    SINGLE_CHOICES = [0, 1, 2]
 
     CHOICES_NESTED = [
         ('Category', (
@@ -165,6 +184,15 @@ class TestChoiceFieldChoicesValidate(TestCase):
         (4, 'Fourth'),
     ]
 
+    MIXED_CHOICES = [
+        ('Category', (
+            (1, 'First'),
+            (2, 'Second'),
+        )),
+        3,
+        (4, 'Fourth'),
+    ]
+
     def test_choices(self):
         """
         Make sure a value for choices works as expected.
@@ -172,8 +200,19 @@ class TestChoiceFieldChoicesValidate(TestCase):
         f = serializers.ChoiceField(choices=self.CHOICES)
         value = self.CHOICES[0][0]
         try:
-            f.validate(value)
-        except ValidationError:
+            f.to_internal_value(value)
+        except serializers.ValidationError:
+            self.fail("Value %s does not validate" % str(value))
+
+    def test_single_choices(self):
+        """
+        Make sure a single value for choices works as expected.
+        """
+        f = serializers.ChoiceField(choices=self.SINGLE_CHOICES)
+        value = self.SINGLE_CHOICES[0]
+        try:
+            f.to_internal_value(value)
+        except serializers.ValidationError:
             self.fail("Value %s does not validate" % str(value))
 
     def test_nested_choices(self):
@@ -183,6 +222,35 @@ class TestChoiceFieldChoicesValidate(TestCase):
         f = serializers.ChoiceField(choices=self.CHOICES_NESTED)
         value = self.CHOICES_NESTED[0][1][0][0]
         try:
-            f.validate(value)
-        except ValidationError:
+            f.to_internal_value(value)
+        except serializers.ValidationError:
             self.fail("Value %s does not validate" % str(value))
+
+    def test_mixed_choices(self):
+        """
+        Make sure mixed values for choices works as expected.
+        """
+        f = serializers.ChoiceField(choices=self.MIXED_CHOICES)
+        value = self.MIXED_CHOICES[1]
+        try:
+            f.to_internal_value(value)
+        except serializers.ValidationError:
+            self.fail("Value %s does not validate" % str(value))
+
+
+class RegexSerializer(serializers.Serializer):
+    pin = serializers.CharField(
+        validators=[RegexValidator(regex=re.compile('^[0-9]{4,6}$'),
+                                   message='A PIN is 4-6 digits')])
+
+
+expected_repr = """
+RegexSerializer():
+    pin = CharField(validators=[<django.core.validators.RegexValidator object>])
+""".strip()
+
+
+class TestRegexSerializer(TestCase):
+    def test_regex_repr(self):
+        serializer_repr = repr(RegexSerializer())
+        assert serializer_repr == expected_repr

@@ -1,349 +1,204 @@
-"""
-Tests to cover nested serializers.
+from django.http import QueryDict
 
-Doesn't cover model serializers.
-"""
-from __future__ import unicode_literals
-from django.test import TestCase
 from rest_framework import serializers
-from . import models
 
 
-class WritableNestedSerializerBasicTests(TestCase):
-    """
-    Tests for deserializing nested entities.
-    Basic tests that use serializers that simply restore to dicts.
-    """
+class TestNestedSerializer:
+    def setup(self):
+        class NestedSerializer(serializers.Serializer):
+            one = serializers.IntegerField(max_value=10)
+            two = serializers.IntegerField(max_value=10)
 
-    def setUp(self):
-        class TrackSerializer(serializers.Serializer):
-            order = serializers.IntegerField()
-            title = serializers.CharField(max_length=100)
-            duration = serializers.IntegerField()
+        class TestSerializer(serializers.Serializer):
+            nested = NestedSerializer()
 
-        class AlbumSerializer(serializers.Serializer):
-            album_name = serializers.CharField(max_length=100)
-            artist = serializers.CharField(max_length=100)
-            tracks = TrackSerializer(many=True)
+        self.Serializer = TestSerializer
 
-        self.AlbumSerializer = AlbumSerializer
-
-    def test_nested_validation_success(self):
-        """
-        Correct nested serialization should return the input data.
-        """
-
-        data = {
-            'album_name': 'Discovery',
-            'artist': 'Daft Punk',
-            'tracks': [
-                {'order': 1, 'title': 'One More Time', 'duration': 235},
-                {'order': 2, 'title': 'Aerodynamic', 'duration': 184},
-                {'order': 3, 'title': 'Digital Love', 'duration': 239}
-            ]
-        }
-
-        serializer = self.AlbumSerializer(data=data)
-        self.assertEqual(serializer.is_valid(), True)
-        self.assertEqual(serializer.object, data)
-
-    def test_nested_validation_error(self):
-        """
-        Incorrect nested serialization should return appropriate error data.
-        """
-
-        data = {
-            'album_name': 'Discovery',
-            'artist': 'Daft Punk',
-            'tracks': [
-                {'order': 1, 'title': 'One More Time', 'duration': 235},
-                {'order': 2, 'title': 'Aerodynamic', 'duration': 184},
-                {'order': 3, 'title': 'Digital Love', 'duration': 'foobar'}
-            ]
-        }
-        expected_errors = {
-            'tracks': [
-                {},
-                {},
-                {'duration': ['Enter a whole number.']}
-            ]
-        }
-
-        serializer = self.AlbumSerializer(data=data)
-        self.assertEqual(serializer.is_valid(), False)
-        self.assertEqual(serializer.errors, expected_errors)
-
-    def test_many_nested_validation_error(self):
-        """
-        Incorrect nested serialization should return appropriate error data
-        when multiple entities are being deserialized.
-        """
-
-        data = [
-            {
-                'album_name': 'Russian Red',
-                'artist': 'I Love Your Glasses',
-                'tracks': [
-                    {'order': 1, 'title': 'Cigarettes', 'duration': 121},
-                    {'order': 2, 'title': 'No Past Land', 'duration': 198},
-                    {'order': 3, 'title': 'They Don\'t Believe', 'duration': 191}
-                ]
-            },
-            {
-                'album_name': 'Discovery',
-                'artist': 'Daft Punk',
-                'tracks': [
-                    {'order': 1, 'title': 'One More Time', 'duration': 235},
-                    {'order': 2, 'title': 'Aerodynamic', 'duration': 184},
-                    {'order': 3, 'title': 'Digital Love', 'duration': 'foobar'}
-                ]
+    def test_nested_validate(self):
+        input_data = {
+            'nested': {
+                'one': '1',
+                'two': '2',
             }
-        ]
-        expected_errors = [
-            {},
-            {
-                'tracks': [
-                    {},
-                    {},
-                    {'duration': ['Enter a whole number.']}
-                ]
-            }
-        ]
-
-        serializer = self.AlbumSerializer(data=data, many=True)
-        self.assertEqual(serializer.is_valid(), False)
-        self.assertEqual(serializer.errors, expected_errors)
-
-
-class WritableNestedSerializerObjectTests(TestCase):
-    """
-    Tests for deserializing nested entities.
-    These tests use serializers that restore to concrete objects.
-    """
-
-    def setUp(self):
-        # Couple of concrete objects that we're going to deserialize into
-        class Track(object):
-            def __init__(self, order, title, duration):
-                self.order, self.title, self.duration = order, title, duration
-
-            def __eq__(self, other):
-                return (
-                    self.order == other.order and
-                    self.title == other.title and
-                    self.duration == other.duration
-                )
-
-        class Album(object):
-            def __init__(self, album_name, artist, tracks):
-                self.album_name, self.artist, self.tracks = album_name, artist, tracks
-
-            def __eq__(self, other):
-                return (
-                    self.album_name == other.album_name and
-                    self.artist == other.artist and
-                    self.tracks == other.tracks
-                )
-
-        # And their corresponding serializers
-        class TrackSerializer(serializers.Serializer):
-            order = serializers.IntegerField()
-            title = serializers.CharField(max_length=100)
-            duration = serializers.IntegerField()
-
-            def restore_object(self, attrs, instance=None):
-                return Track(attrs['order'], attrs['title'], attrs['duration'])
-
-        class AlbumSerializer(serializers.Serializer):
-            album_name = serializers.CharField(max_length=100)
-            artist = serializers.CharField(max_length=100)
-            tracks = TrackSerializer(many=True)
-
-            def restore_object(self, attrs, instance=None):
-                return Album(attrs['album_name'], attrs['artist'], attrs['tracks'])
-
-        self.Album, self.Track = Album, Track
-        self.AlbumSerializer = AlbumSerializer
-
-    def test_nested_validation_success(self):
-        """
-        Correct nested serialization should return a restored object
-        that corresponds to the input data.
-        """
-
-        data = {
-            'album_name': 'Discovery',
-            'artist': 'Daft Punk',
-            'tracks': [
-                {'order': 1, 'title': 'One More Time', 'duration': 235},
-                {'order': 2, 'title': 'Aerodynamic', 'duration': 184},
-                {'order': 3, 'title': 'Digital Love', 'duration': 239}
-            ]
         }
-        expected_object = self.Album(
-            album_name='Discovery',
-            artist='Daft Punk',
-            tracks=[
-                self.Track(order=1, title='One More Time', duration=235),
-                self.Track(order=2, title='Aerodynamic', duration=184),
-                self.Track(order=3, title='Digital Love', duration=239),
-            ]
-        )
-
-        serializer = self.AlbumSerializer(data=data)
-        self.assertEqual(serializer.is_valid(), True)
-        self.assertEqual(serializer.object, expected_object)
-
-    def test_many_nested_validation_success(self):
-        """
-        Correct nested serialization should return multiple restored objects
-        that corresponds to the input data when multiple objects are
-        being deserialized.
-        """
-
-        data = [
-            {
-                'album_name': 'Russian Red',
-                'artist': 'I Love Your Glasses',
-                'tracks': [
-                    {'order': 1, 'title': 'Cigarettes', 'duration': 121},
-                    {'order': 2, 'title': 'No Past Land', 'duration': 198},
-                    {'order': 3, 'title': 'They Don\'t Believe', 'duration': 191}
-                ]
-            },
-            {
-                'album_name': 'Discovery',
-                'artist': 'Daft Punk',
-                'tracks': [
-                    {'order': 1, 'title': 'One More Time', 'duration': 235},
-                    {'order': 2, 'title': 'Aerodynamic', 'duration': 184},
-                    {'order': 3, 'title': 'Digital Love', 'duration': 239}
-                ]
+        expected_data = {
+            'nested': {
+                'one': 1,
+                'two': 2,
             }
-        ]
-        expected_object = [
-            self.Album(
-                album_name='Russian Red',
-                artist='I Love Your Glasses',
-                tracks=[
-                    self.Track(order=1, title='Cigarettes', duration=121),
-                    self.Track(order=2, title='No Past Land', duration=198),
-                    self.Track(order=3, title='They Don\'t Believe', duration=191),
-                ]
-            ),
-            self.Album(
-                album_name='Discovery',
-                artist='Daft Punk',
-                tracks=[
-                    self.Track(order=1, title='One More Time', duration=235),
-                    self.Track(order=2, title='Aerodynamic', duration=184),
-                    self.Track(order=3, title='Digital Love', duration=239),
-                ]
-            )
-        ]
-
-        serializer = self.AlbumSerializer(data=data, many=True)
-        self.assertEqual(serializer.is_valid(), True)
-        self.assertEqual(serializer.object, expected_object)
-
-
-class ForeignKeyNestedSerializerUpdateTests(TestCase):
-    def setUp(self):
-        class Artist(object):
-            def __init__(self, name):
-                self.name = name
-
-            def __eq__(self, other):
-                return self.name == other.name
-
-        class Album(object):
-            def __init__(self, name, artist):
-                self.name, self.artist = name, artist
-
-            def __eq__(self, other):
-                return self.name == other.name and self.artist == other.artist
-
-        class ArtistSerializer(serializers.Serializer):
-            name = serializers.CharField()
-
-            def restore_object(self, attrs, instance=None):
-                if instance:
-                    instance.name = attrs['name']
-                else:
-                    instance = Artist(attrs['name'])
-                return instance
-
-        class AlbumSerializer(serializers.Serializer):
-            name = serializers.CharField()
-            by = ArtistSerializer(source='artist')
-
-            def restore_object(self, attrs, instance=None):
-                if instance:
-                    instance.name = attrs['name']
-                    instance.artist = attrs['artist']
-                else:
-                    instance = Album(attrs['name'], attrs['artist'])
-                return instance
-
-        self.Artist = Artist
-        self.Album = Album
-        self.AlbumSerializer = AlbumSerializer
-
-    def test_create_via_foreign_key_with_source(self):
-        """
-        Check that we can both *create* and *update* into objects across
-        ForeignKeys that have a `source` specified.
-        Regression test for #1170
-        """
-        data = {
-            'name': 'Discovery',
-            'by': {'name': 'Daft Punk'},
         }
+        serializer = self.Serializer(data=input_data)
+        assert serializer.is_valid()
+        assert serializer.validated_data == expected_data
 
-        expected = self.Album(artist=self.Artist('Daft Punk'), name='Discovery')
+    def test_nested_serialize_empty(self):
+        expected_data = {
+            'nested': {
+                'one': None,
+                'two': None
+            }
+        }
+        serializer = self.Serializer()
+        assert serializer.data == expected_data
 
-        # create
-        serializer = self.AlbumSerializer(data=data)
-        self.assertEqual(serializer.is_valid(), True)
-        self.assertEqual(serializer.object, expected)
-
-        # update
-        original = self.Album(artist=self.Artist('The Bats'), name='Free All the Monsters')
-        serializer = self.AlbumSerializer(instance=original, data=data)
-        self.assertEqual(serializer.is_valid(), True)
-        self.assertEqual(serializer.object, expected)
+    def test_nested_serialize_no_data(self):
+        data = None
+        serializer = self.Serializer(data=data)
+        assert not serializer.is_valid()
+        assert serializer.errors == {'non_field_errors': ['No data provided']}
 
 
-class NestedModelSerializerUpdateTests(TestCase):
-    def test_second_nested_level(self):
-        john = models.Person.objects.create(name="john")
+class TestNotRequiredNestedSerializer:
+    def setup(self):
+        class NestedSerializer(serializers.Serializer):
+            one = serializers.IntegerField(max_value=10)
 
-        post = john.blogpost_set.create(title="Test blog post")
-        post.blogpostcomment_set.create(text="I hate this blog post")
-        post.blogpostcomment_set.create(text="I love this blog post")
+        class TestSerializer(serializers.Serializer):
+            nested = NestedSerializer(required=False)
 
-        class BlogPostCommentSerializer(serializers.ModelSerializer):
-            class Meta:
-                model = models.BlogPostComment
+        self.Serializer = TestSerializer
 
-        class BlogPostSerializer(serializers.ModelSerializer):
-            comments = BlogPostCommentSerializer(many=True, source='blogpostcomment_set')
+    def test_json_validate(self):
+        input_data = {}
+        serializer = self.Serializer(data=input_data)
+        assert serializer.is_valid()
 
-            class Meta:
-                model = models.BlogPost
-                fields = ('id', 'title', 'comments')
+        input_data = {'nested': {'one': '1'}}
+        serializer = self.Serializer(data=input_data)
+        assert serializer.is_valid()
 
-        class PersonSerializer(serializers.ModelSerializer):
-            posts = BlogPostSerializer(many=True, source='blogpost_set')
+    def test_multipart_validate(self):
+        input_data = QueryDict('')
+        serializer = self.Serializer(data=input_data)
+        assert serializer.is_valid()
 
-            class Meta:
-                model = models.Person
-                fields = ('id', 'name', 'age', 'posts')
+        input_data = QueryDict('nested[one]=1')
+        serializer = self.Serializer(data=input_data)
+        assert serializer.is_valid()
 
-        serialize = PersonSerializer(instance=john)
-        deserialize = PersonSerializer(data=serialize.data, instance=john)
-        self.assertTrue(deserialize.is_valid())
 
-        result = deserialize.object
-        result.save()
-        self.assertEqual(result.id, john.id)
+class TestNestedSerializerWithMany:
+    def setup(self):
+        class NestedSerializer(serializers.Serializer):
+            example = serializers.IntegerField(max_value=10)
+
+        class TestSerializer(serializers.Serializer):
+            allow_null = NestedSerializer(many=True, allow_null=True)
+            not_allow_null = NestedSerializer(many=True)
+            allow_empty = NestedSerializer(many=True, allow_empty=True)
+            not_allow_empty = NestedSerializer(many=True, allow_empty=False)
+
+        self.Serializer = TestSerializer
+
+    def test_null_allowed_if_allow_null_is_set(self):
+        input_data = {
+            'allow_null': None,
+            'not_allow_null': [{'example': '2'}, {'example': '3'}],
+            'allow_empty': [{'example': '2'}],
+            'not_allow_empty': [{'example': '2'}],
+        }
+        expected_data = {
+            'allow_null': None,
+            'not_allow_null': [{'example': 2}, {'example': 3}],
+            'allow_empty': [{'example': 2}],
+            'not_allow_empty': [{'example': 2}],
+        }
+        serializer = self.Serializer(data=input_data)
+
+        assert serializer.is_valid(), serializer.errors
+        assert serializer.validated_data == expected_data
+
+    def test_null_is_not_allowed_if_allow_null_is_not_set(self):
+        input_data = {
+            'allow_null': None,
+            'not_allow_null': None,
+            'allow_empty': [{'example': '2'}],
+            'not_allow_empty': [{'example': '2'}],
+        }
+        serializer = self.Serializer(data=input_data)
+
+        assert not serializer.is_valid()
+
+        expected_errors = {'not_allow_null': [serializer.error_messages['null']]}
+        assert serializer.errors == expected_errors
+
+    def test_run_the_field_validation_even_if_the_field_is_null(self):
+        class TestSerializer(self.Serializer):
+            validation_was_run = False
+
+            def validate_allow_null(self, value):
+                TestSerializer.validation_was_run = True
+                return value
+
+        input_data = {
+            'allow_null': None,
+            'not_allow_null': [{'example': 2}],
+            'allow_empty': [{'example': 2}],
+            'not_allow_empty': [{'example': 2}],
+        }
+        serializer = TestSerializer(data=input_data)
+
+        assert serializer.is_valid()
+        assert serializer.validated_data == input_data
+        assert TestSerializer.validation_was_run
+
+    def test_empty_allowed_if_allow_empty_is_set(self):
+        input_data = {
+            'allow_null': [{'example': '2'}],
+            'not_allow_null': [{'example': '2'}],
+            'allow_empty': [],
+            'not_allow_empty': [{'example': '2'}],
+        }
+        expected_data = {
+            'allow_null': [{'example': 2}],
+            'not_allow_null': [{'example': 2}],
+            'allow_empty': [],
+            'not_allow_empty': [{'example': 2}],
+        }
+        serializer = self.Serializer(data=input_data)
+
+        assert serializer.is_valid(), serializer.errors
+        assert serializer.validated_data == expected_data
+
+    def test_empty_not_allowed_if_allow_empty_is_set_to_false(self):
+        input_data = {
+            'allow_null': [{'example': '2'}],
+            'not_allow_null': [{'example': '2'}],
+            'allow_empty': [],
+            'not_allow_empty': [],
+        }
+        serializer = self.Serializer(data=input_data)
+
+        assert not serializer.is_valid()
+
+        expected_errors = {'not_allow_empty': {'non_field_errors': [serializers.ListSerializer.default_error_messages['empty']]}}
+        assert serializer.errors == expected_errors
+
+
+class TestNestedSerializerWithList:
+    def setup(self):
+        class NestedSerializer(serializers.Serializer):
+            example = serializers.MultipleChoiceField(choices=[1, 2, 3])
+
+        class TestSerializer(serializers.Serializer):
+            nested = NestedSerializer()
+
+        self.Serializer = TestSerializer
+
+    def test_nested_serializer_with_list_json(self):
+        input_data = {
+            'nested': {
+                'example': [1, 2],
+            }
+        }
+        serializer = self.Serializer(data=input_data)
+
+        assert serializer.is_valid()
+        assert serializer.validated_data['nested']['example'] == {1, 2}
+
+    def test_nested_serializer_with_list_multipart(self):
+        input_data = QueryDict('nested.example=1&nested.example=2')
+        serializer = self.Serializer(data=input_data)
+
+        assert serializer.is_valid()
+        assert serializer.validated_data['nested']['example'] == {1, 2}

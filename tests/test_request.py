@@ -2,31 +2,41 @@
 Tests for content parsing, and form-overloaded content parsing.
 """
 from __future__ import unicode_literals
-from django.conf.urls import patterns
-from django.contrib.auth.models import User
+
+import os.path
+import tempfile
+
+import pytest
+from django.conf.urls import url
 from django.contrib.auth import authenticate, login, logout
+from django.contrib.auth.middleware import AuthenticationMiddleware
+from django.contrib.auth.models import User
 from django.contrib.sessions.middleware import SessionMiddleware
-from django.core.handlers.wsgi import WSGIRequest
-from django.test import TestCase
+from django.core.files.uploadedfile import SimpleUploadedFile
+from django.test import TestCase, override_settings
 from django.utils import six
+
 from rest_framework import status
 from rest_framework.authentication import SessionAuthentication
-from rest_framework.parsers import (
-    BaseParser,
-    FormParser,
-    MultiPartParser,
-    JSONParser
-)
-from rest_framework.request import Request, Empty
+from rest_framework.parsers import BaseParser, FormParser, MultiPartParser
+from rest_framework.request import Request, WrappedAttributeError
 from rest_framework.response import Response
-from rest_framework.settings import api_settings
-from rest_framework.test import APIRequestFactory, APIClient
+from rest_framework.test import APIClient, APIRequestFactory
 from rest_framework.views import APIView
-from io import BytesIO
-import json
-
 
 factory = APIRequestFactory()
+
+
+class TestInitializer(TestCase):
+    def test_request_type(self):
+        request = Request(factory.get('/'))
+
+        message = (
+            'The `request` argument must be an instance of '
+            '`django.http.HttpRequest`, not `rest_framework.request.Request`.'
+        )
+        with self.assertRaisesMessage(AssertionError, message):
+            Request(request)
 
 
 class PlainTextParser(BaseParser):
@@ -42,70 +52,40 @@ class PlainTextParser(BaseParser):
         return stream.read()
 
 
-class TestMethodOverloading(TestCase):
-    def test_method(self):
-        """
-        Request methods should be same as underlying request.
-        """
-        request = Request(factory.get('/'))
-        self.assertEqual(request.method, 'GET')
-        request = Request(factory.post('/'))
-        self.assertEqual(request.method, 'POST')
-
-    def test_overloaded_method(self):
-        """
-        POST requests can be overloaded to another method by setting a
-        reserved form field
-        """
-        request = Request(factory.post('/', {api_settings.FORM_METHOD_OVERRIDE: 'DELETE'}))
-        self.assertEqual(request.method, 'DELETE')
-
-    def test_x_http_method_override_header(self):
-        """
-        POST requests can also be overloaded to another method by setting
-        the X-HTTP-Method-Override header.
-        """
-        request = Request(factory.post('/', {'foo': 'bar'}, HTTP_X_HTTP_METHOD_OVERRIDE='DELETE'))
-        self.assertEqual(request.method, 'DELETE')
-
-        request = Request(factory.get('/', {'foo': 'bar'}, HTTP_X_HTTP_METHOD_OVERRIDE='DELETE'))
-        self.assertEqual(request.method, 'DELETE')
-
-
 class TestContentParsing(TestCase):
     def test_standard_behaviour_determines_no_content_GET(self):
         """
-        Ensure request.DATA returns empty QueryDict for GET request.
+        Ensure request.data returns empty QueryDict for GET request.
         """
         request = Request(factory.get('/'))
-        self.assertEqual(request.DATA, {})
+        assert request.data == {}
 
     def test_standard_behaviour_determines_no_content_HEAD(self):
         """
-        Ensure request.DATA returns empty QueryDict for HEAD request.
+        Ensure request.data returns empty QueryDict for HEAD request.
         """
         request = Request(factory.head('/'))
-        self.assertEqual(request.DATA, {})
+        assert request.data == {}
 
     def test_request_DATA_with_form_content(self):
         """
-        Ensure request.DATA returns content for POST request with form content.
+        Ensure request.data returns content for POST request with form content.
         """
         data = {'qwerty': 'uiop'}
         request = Request(factory.post('/', data))
         request.parsers = (FormParser(), MultiPartParser())
-        self.assertEqual(list(request.DATA.items()), list(data.items()))
+        assert list(request.data.items()) == list(data.items())
 
     def test_request_DATA_with_text_content(self):
         """
-        Ensure request.DATA returns content for POST request with
+        Ensure request.data returns content for POST request with
         non-form content.
         """
         content = six.b('qwerty')
         content_type = 'text/plain'
         request = Request(factory.post('/', content, content_type=content_type))
         request.parsers = (PlainTextParser(),)
-        self.assertEqual(request.DATA, content)
+        assert request.data == content
 
     def test_request_POST_with_form_content(self):
         """
@@ -114,153 +94,37 @@ class TestContentParsing(TestCase):
         data = {'qwerty': 'uiop'}
         request = Request(factory.post('/', data))
         request.parsers = (FormParser(), MultiPartParser())
-        self.assertEqual(list(request.POST.items()), list(data.items()))
+        assert list(request.POST.items()) == list(data.items())
+
+    def test_request_POST_with_files(self):
+        """
+        Ensure request.POST returns no content for POST request with file content.
+        """
+        upload = SimpleUploadedFile("file.txt", b"file_content")
+        request = Request(factory.post('/', {'upload': upload}))
+        request.parsers = (FormParser(), MultiPartParser())
+        assert list(request.POST.keys()) == []
+        assert list(request.FILES.keys()) == ['upload']
 
     def test_standard_behaviour_determines_form_content_PUT(self):
         """
-        Ensure request.DATA returns content for PUT request with form content.
+        Ensure request.data returns content for PUT request with form content.
         """
         data = {'qwerty': 'uiop'}
         request = Request(factory.put('/', data))
         request.parsers = (FormParser(), MultiPartParser())
-        self.assertEqual(list(request.DATA.items()), list(data.items()))
+        assert list(request.data.items()) == list(data.items())
 
     def test_standard_behaviour_determines_non_form_content_PUT(self):
         """
-        Ensure request.DATA returns content for PUT request with
+        Ensure request.data returns content for PUT request with
         non-form content.
         """
         content = six.b('qwerty')
         content_type = 'text/plain'
         request = Request(factory.put('/', content, content_type=content_type))
         request.parsers = (PlainTextParser(), )
-        self.assertEqual(request.DATA, content)
-
-    def test_overloaded_behaviour_allows_content_tunnelling(self):
-        """
-        Ensure request.DATA returns content for overloaded POST request.
-        """
-        json_data = {'foobar': 'qwerty'}
-        content = json.dumps(json_data)
-        content_type = 'application/json'
-        form_data = {
-            api_settings.FORM_CONTENT_OVERRIDE: content,
-            api_settings.FORM_CONTENTTYPE_OVERRIDE: content_type
-        }
-        request = Request(factory.post('/', form_data))
-        request.parsers = (JSONParser(), )
-        self.assertEqual(request.DATA, json_data)
-
-    def test_form_POST_unicode(self):
-        """
-        JSON POST via default web interface with unicode data
-        """
-        # Note: environ and other variables here have simplified content compared to real Request
-        CONTENT = b'_content_type=application%2Fjson&_content=%7B%22request%22%3A+4%2C+%22firm%22%3A+1%2C+%22text%22%3A+%22%D0%9F%D1%80%D0%B8%D0%B2%D0%B5%D1%82%21%22%7D'
-        environ = {
-            'REQUEST_METHOD': 'POST',
-            'CONTENT_TYPE': 'application/x-www-form-urlencoded',
-            'CONTENT_LENGTH': len(CONTENT),
-            'wsgi.input': BytesIO(CONTENT),
-        }
-        wsgi_request = WSGIRequest(environ=environ)
-        wsgi_request._load_post_and_files()
-        parsers = (JSONParser(), FormParser(), MultiPartParser())
-        parser_context = {
-            'encoding': 'utf-8',
-            'kwargs': {},
-            'args': (),
-        }
-        request = Request(wsgi_request, parsers=parsers, parser_context=parser_context)
-        method = request.method
-        self.assertEqual(method, 'POST')
-        self.assertEqual(request._content_type, 'application/json')
-        self.assertEqual(request._stream.getvalue(), b'{"request": 4, "firm": 1, "text": "\xd0\x9f\xd1\x80\xd0\xb8\xd0\xb2\xd0\xb5\xd1\x82!"}')
-        self.assertEqual(request._data, Empty)
-        self.assertEqual(request._files, Empty)
-
-    # def test_accessing_post_after_data_form(self):
-    #     """
-    #     Ensures request.POST can be accessed after request.DATA in
-    #     form request.
-    #     """
-    #     data = {'qwerty': 'uiop'}
-    #     request = factory.post('/', data=data)
-    #     self.assertEqual(request.DATA.items(), data.items())
-    #     self.assertEqual(request.POST.items(), data.items())
-
-    # def test_accessing_post_after_data_for_json(self):
-    #     """
-    #     Ensures request.POST can be accessed after request.DATA in
-    #     json request.
-    #     """
-    #     data = {'qwerty': 'uiop'}
-    #     content = json.dumps(data)
-    #     content_type = 'application/json'
-    #     parsers = (JSONParser, )
-
-    #     request = factory.post('/', content, content_type=content_type,
-    #                            parsers=parsers)
-    #     self.assertEqual(request.DATA.items(), data.items())
-    #     self.assertEqual(request.POST.items(), [])
-
-    # def test_accessing_post_after_data_for_overloaded_json(self):
-    #     """
-    #     Ensures request.POST can be accessed after request.DATA in overloaded
-    #     json request.
-    #     """
-    #     data = {'qwerty': 'uiop'}
-    #     content = json.dumps(data)
-    #     content_type = 'application/json'
-    #     parsers = (JSONParser, )
-    #     form_data = {Request._CONTENT_PARAM: content,
-    #                  Request._CONTENTTYPE_PARAM: content_type}
-
-    #     request = factory.post('/', form_data, parsers=parsers)
-    #     self.assertEqual(request.DATA.items(), data.items())
-    #     self.assertEqual(request.POST.items(), form_data.items())
-
-    # def test_accessing_data_after_post_form(self):
-    #     """
-    #     Ensures request.DATA can be accessed after request.POST in
-    #     form request.
-    #     """
-    #     data = {'qwerty': 'uiop'}
-    #     parsers = (FormParser, MultiPartParser)
-    #     request = factory.post('/', data, parsers=parsers)
-
-    #     self.assertEqual(request.POST.items(), data.items())
-    #     self.assertEqual(request.DATA.items(), data.items())
-
-    # def test_accessing_data_after_post_for_json(self):
-    #     """
-    #     Ensures request.DATA can be accessed after request.POST in
-    #     json request.
-    #     """
-    #     data = {'qwerty': 'uiop'}
-    #     content = json.dumps(data)
-    #     content_type = 'application/json'
-    #     parsers = (JSONParser, )
-    #     request = factory.post('/', content, content_type=content_type,
-    #                            parsers=parsers)
-    #     self.assertEqual(request.POST.items(), [])
-    #     self.assertEqual(request.DATA.items(), data.items())
-
-    # def test_accessing_data_after_post_for_overloaded_json(self):
-    #     """
-    #     Ensures request.DATA can be accessed after request.POST in overloaded
-    #     json request
-    #     """
-    #     data = {'qwerty': 'uiop'}
-    #     content = json.dumps(data)
-    #     content_type = 'application/json'
-    #     parsers = (JSONParser, )
-    #     form_data = {Request._CONTENT_PARAM: content,
-    #                  Request._CONTENTTYPE_PARAM: content_type}
-
-    #     request = factory.post('/', form_data, parsers=parsers)
-    #     self.assertEqual(request.POST.items(), form_data.items())
-    #     self.assertEqual(request.DATA.items(), data.items())
+        assert request.data == content
 
 
 class MockView(APIView):
@@ -270,17 +134,43 @@ class MockView(APIView):
         if request.POST.get('example') is not None:
             return Response(status=status.HTTP_200_OK)
 
-        return Response(status=status.INTERNAL_SERVER_ERROR)
-
-urlpatterns = patterns(
-    '',
-    (r'^$', MockView.as_view()),
-)
+        return Response(status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
+class FileUploadView(APIView):
+    def post(self, request):
+        filenames = [file.temporary_file_path() for file in request.FILES.values()]
+
+        for filename in filenames:
+            assert os.path.exists(filename)
+
+        return Response(status=status.HTTP_200_OK, data=filenames)
+
+
+urlpatterns = [
+    url(r'^$', MockView.as_view()),
+    url(r'^upload/$', FileUploadView.as_view())
+]
+
+
+@override_settings(
+    ROOT_URLCONF='tests.test_request',
+    FILE_UPLOAD_HANDLERS=['django.core.files.uploadhandler.TemporaryFileUploadHandler'])
+class FileUploadTests(TestCase):
+
+    def test_fileuploads_closed_at_request_end(self):
+        with tempfile.NamedTemporaryFile() as f:
+            response = self.client.post('/upload/', {'file': f})
+
+        # sanity check that file was processed
+        assert len(response.data) == 1
+
+        for file in response.data:
+            assert not os.path.exists(file)
+
+
+@override_settings(ROOT_URLCONF='tests.test_request')
 class TestContentParsingWithAuthentication(TestCase):
-    urls = 'tests.test_request'
-
     def setUp(self):
         self.csrf_client = APIClient(enforce_csrf_checks=True)
         self.username = 'john'
@@ -296,22 +186,10 @@ class TestContentParsingWithAuthentication(TestCase):
         content = {'example': 'example'}
 
         response = self.client.post('/', content)
-        self.assertEqual(status.HTTP_200_OK, response.status_code)
+        assert status.HTTP_200_OK == response.status_code
 
         response = self.csrf_client.post('/', content)
-        self.assertEqual(status.HTTP_200_OK, response.status_code)
-
-    # def test_user_logged_in_authentication_has_post_when_logged_in(self):
-    #     """Ensures request.POST exists after UserLoggedInAuthentication when user does log in"""
-    #     self.client.login(username='john', password='password')
-    #     self.csrf_client.login(username='john', password='password')
-    #     content = {'example': 'example'}
-
-    #     response = self.client.post('/', content)
-    #     self.assertEqual(status.OK, response.status_code, "POST data is malformed")
-
-    #     response = self.csrf_client.post('/', content)
-    #     self.assertEqual(status.OK, response.status_code, "POST data is malformed")
+        assert status.HTTP_200_OK == response.status_code
 
 
 class TestUserSetter(TestCase):
@@ -319,30 +197,98 @@ class TestUserSetter(TestCase):
     def setUp(self):
         # Pass request object through session middleware so session is
         # available to login and logout functions
-        self.request = Request(factory.get('/'))
-        SessionMiddleware().process_request(self.request)
+        self.wrapped_request = factory.get('/')
+        self.request = Request(self.wrapped_request)
+        SessionMiddleware().process_request(self.wrapped_request)
+        AuthenticationMiddleware().process_request(self.wrapped_request)
 
         User.objects.create_user('ringo', 'starr@thebeatles.com', 'yellow')
         self.user = authenticate(username='ringo', password='yellow')
 
     def test_user_can_be_set(self):
         self.request.user = self.user
-        self.assertEqual(self.request.user, self.user)
+        assert self.request.user == self.user
 
     def test_user_can_login(self):
         login(self.request, self.user)
-        self.assertEqual(self.request.user, self.user)
+        assert self.request.user == self.user
 
     def test_user_can_logout(self):
         self.request.user = self.user
-        self.assertFalse(self.request.user.is_anonymous())
+        assert not self.request.user.is_anonymous
         logout(self.request)
-        self.assertTrue(self.request.user.is_anonymous())
+        assert self.request.user.is_anonymous
+
+    def test_logged_in_user_is_set_on_wrapped_request(self):
+        login(self.request, self.user)
+        assert self.wrapped_request.user == self.user
+
+    def test_calling_user_fails_when_attribute_error_is_raised(self):
+        """
+        This proves that when an AttributeError is raised inside of the request.user
+        property, that we can handle this and report the true, underlying error.
+        """
+        class AuthRaisesAttributeError(object):
+            def authenticate(self, request):
+                self.MISSPELLED_NAME_THAT_DOESNT_EXIST
+
+        request = Request(self.wrapped_request, authenticators=(AuthRaisesAttributeError(),))
+
+        # The middleware processes the underlying Django request, sets anonymous user
+        assert self.wrapped_request.user.is_anonymous
+
+        # The DRF request object does not have a user and should run authenticators
+        expected = r"no attribute 'MISSPELLED_NAME_THAT_DOESNT_EXIST'"
+        with pytest.raises(WrappedAttributeError, match=expected):
+            request.user
+
+        # python 2 hasattr fails for *any* exception, not just AttributeError
+        if six.PY2:
+            return
+
+        with pytest.raises(WrappedAttributeError, match=expected):
+            hasattr(request, 'user')
+
+        with pytest.raises(WrappedAttributeError, match=expected):
+            login(request, self.user)
 
 
 class TestAuthSetter(TestCase):
-
     def test_auth_can_be_set(self):
         request = Request(factory.get('/'))
         request.auth = 'DUMMY'
-        self.assertEqual(request.auth, 'DUMMY')
+        assert request.auth == 'DUMMY'
+
+
+class TestSecure(TestCase):
+
+    def test_default_secure_false(self):
+        request = Request(factory.get('/', secure=False))
+        assert request.scheme == 'http'
+
+    def test_default_secure_true(self):
+        request = Request(factory.get('/', secure=True))
+        assert request.scheme == 'https'
+
+
+class TestWSGIRequestProxy(TestCase):
+    def test_attribute_access(self):
+        wsgi_request = factory.get('/')
+        request = Request(wsgi_request)
+
+        inner_sentinel = object()
+        wsgi_request.inner_property = inner_sentinel
+        assert request.inner_property is inner_sentinel
+
+        outer_sentinel = object()
+        request.inner_property = outer_sentinel
+        assert request.inner_property is outer_sentinel
+
+    def test_exception(self):
+        # ensure the exception message is not for the underlying WSGIRequest
+        wsgi_request = factory.get('/')
+        request = Request(wsgi_request)
+
+        message = "'Request' object has no attribute 'inner_property'"
+        with self.assertRaisesMessage(AttributeError, message):
+            request.inner_property

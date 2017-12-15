@@ -1,4 +1,4 @@
-<a class="github" href="viewsets.py"></a>
+source: viewsets.py
 
 # ViewSets
 
@@ -27,7 +27,7 @@ Let's define a simple viewset that can be used to list or retrieve all the users
 
     class UserViewSet(viewsets.ViewSet):
         """
-        A simple ViewSet that for listing or retrieving users.
+        A simple ViewSet for listing or retrieving users.
         """
         def list(self, request):
             queryset = User.objects.all()
@@ -51,7 +51,7 @@ Typically we wouldn't do this, but would instead register the viewset with a rou
     from rest_framework.routers import DefaultRouter
 
     router = DefaultRouter()
-    router.register(r'users', UserViewSet)
+    router.register(r'users', UserViewSet, base_name='user')
     urlpatterns = router.urls
 
 Rather than writing your own viewsets, you'll often want to use the existing base classes that provide a default set of behavior.  For example:
@@ -124,7 +124,7 @@ For example:
         @detail_route(methods=['post'])
         def set_password(self, request, pk=None):
             user = self.get_object()
-            serializer = PasswordSerializer(data=request.DATA)
+            serializer = PasswordSerializer(data=request.data)
             if serializer.is_valid():
                 user.set_password(serializer.data['password'])
                 user.save()
@@ -136,8 +136,13 @@ For example:
         @list_route()
         def recent_users(self, request):
             recent_users = User.objects.all().order('-last_login')
+
             page = self.paginate_queryset(recent_users)
-            serializer = self.get_pagination_serializer(page)
+            if page is not None:
+                serializer = self.get_serializer(page, many=True)
+                return self.get_paginated_response(serializer.data)
+
+            serializer = self.get_serializer(recent_users, many=True)
             return Response(serializer.data)
 
 The decorators can additionally take extra arguments that will be set for the routed view only.  For example...
@@ -146,13 +151,28 @@ The decorators can additionally take extra arguments that will be set for the ro
         def set_password(self, request, pk=None):
            ...
 
-Theses decorators will route `GET` requests by default, but may also accept other HTTP methods, by using the `methods` argument.  For example:
+These decorators will route `GET` requests by default, but may also accept other HTTP methods, by using the `methods` argument.  For example:
 
         @detail_route(methods=['post', 'delete'])
         def unset_password(self, request, pk=None):
            ...
 
 The two new actions will then be available at the urls `^users/{pk}/set_password/$` and `^users/{pk}/unset_password/$`
+
+## Reversing action URLs
+
+If you need to get the URL of an action, use the `.reverse_action()` method. This is a convenience wrapper for `reverse()`, automatically passing the view's `request` object and prepending the `url_name` with the `.basename` attribute.
+
+Note that the `basename` is provided by the router during `ViewSet` registration. If you are not using a router, then you must provide the `basename` argument to the `.as_view()` method.
+
+Using the example from the previous section:
+
+```python
+>>> view.reverse_action('set-password', args=['1'])
+'http://localhost:8000/api/users/1/set_password'
+```
+
+The `url_name` argument should match the same argument to the `@list_route` and `@detail_route` decorators. Additionally, this can be used to reverse the default `list` and `detail` routes.
 
 ---
 
@@ -174,11 +194,11 @@ In order to use a `GenericViewSet` class you'll override the class and either mi
 
 The `ModelViewSet` class inherits from `GenericAPIView` and includes implementations for various actions, by mixing in the behavior of the various mixin classes.
 
-The actions provided by the `ModelViewSet` class are `.list()`, `.retrieve()`,  `.create()`, `.update()`, and `.destroy()`.
+The actions provided by the `ModelViewSet` class are `.list()`, `.retrieve()`,  `.create()`, `.update()`, `.partial_update()`, and `.destroy()`.
 
 #### Example
 
-Because `ModelViewSet` extends `GenericAPIView`, you'll normally need to provide at least the `queryset` and `serializer_class` attributes, or the `model` attribute shortcut.  For example:
+Because `ModelViewSet` extends `GenericAPIView`, you'll normally need to provide at least the `queryset` and `serializer_class` attributes.  For example:
 
     class AccountViewSet(viewsets.ModelViewSet):
         """
@@ -200,6 +220,8 @@ Note that you can use any of the standard attributes or method overrides provide
 
         def get_queryset(self):
             return self.request.user.accounts.all()
+
+Note however that upon removal of the `queryset` property from your `ViewSet`, any associated [router][routers] will be unable to derive the base_name of your Model automatically, and so you will have to specify the `base_name` kwarg as part of your [router registration][routers].
 
 Also note that although this class provides the complete set of create/list/retrieve/update/destroy actions by default, you can restrict the available operations by using the standard permission classes.
 
@@ -228,6 +250,8 @@ You may need to provide custom `ViewSet` classes that do not have the full set o
 
 To create a base viewset class that provides `create`, `list` and `retrieve` operations, inherit from `GenericViewSet`, and mixin the required actions:
 
+    from rest_framework import mixins
+
     class CreateListRetrieveViewSet(mixins.CreateModelMixin,
                                     mixins.ListModelMixin,
                                     mixins.RetrieveModelMixin,
@@ -243,3 +267,4 @@ To create a base viewset class that provides `create`, `list` and `retrieve` ope
 By creating your own base `ViewSet` classes, you can provide common behavior that can be reused in multiple viewsets across your API.
 
 [cite]: http://guides.rubyonrails.org/routing.html
+[routers]: routers.md

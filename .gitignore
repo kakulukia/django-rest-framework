@@ -3,18 +3,17 @@
 *~
 .*
 
-html/
-htmlcov/
-coverage/
-build/
-dist/
-*.egg-info/
+/site/
+/htmlcov/
+/coverage/
+/build/
+/dist/
+/*.egg-info/
+/env/
 MANIFEST
+coverage.*
 
-bin/
-include/
-lib/
-local/
-
+!.editorconfig
 !.gitignore
 !.travis.yml
+!.isort.cfg

@@ -1,15 +1,17 @@
 from __future__ import unicode_literals
-from django.conf.urls import url, include
-from django.core.urlresolvers import RegexURLResolver
+
+from django.conf.urls import include, url
+
+from rest_framework.compat import URLResolver, get_regex_pattern
 from rest_framework.settings import api_settings
 
 
 def apply_suffix_patterns(urlpatterns, suffix_pattern, suffix_required):
     ret = []
     for urlpattern in urlpatterns:
-        if isinstance(urlpattern, RegexURLResolver):
+        if isinstance(urlpattern, URLResolver):
             # Set of included URL patterns
-            regex = urlpattern.regex.pattern
+            regex = get_regex_pattern(urlpattern)
             namespace = urlpattern.namespace
             app_name = urlpattern.app_name
             kwargs = urlpattern.default_kwargs
@@ -17,12 +19,11 @@ def apply_suffix_patterns(urlpatterns, suffix_pattern, suffix_required):
             patterns = apply_suffix_patterns(urlpattern.url_patterns,
                                              suffix_pattern,
                                              suffix_required)
-            ret.append(url(regex, include(patterns, namespace, app_name), kwargs))
-
+            ret.append(url(regex, include((patterns, app_name), namespace), kwargs))
         else:
             # Regular URL pattern
-            regex = urlpattern.regex.pattern.rstrip('$') + suffix_pattern
-            view = urlpattern._callback or urlpattern._callback_str
+            regex = get_regex_pattern(urlpattern).rstrip('$').rstrip('/') + suffix_pattern
+            view = urlpattern.callback
             kwargs = urlpattern.default_args
             name = urlpattern.name
             # Add in both the existing and the new urlpattern
@@ -55,8 +56,8 @@ def format_suffix_patterns(urlpatterns, suffix_required=False, allowed=None):
             allowed_pattern = allowed[0]
         else:
             allowed_pattern = '(%s)' % '|'.join(allowed)
-        suffix_pattern = r'\.(?P<%s>%s)$' % (suffix_kwarg, allowed_pattern)
+        suffix_pattern = r'\.(?P<%s>%s)/?$' % (suffix_kwarg, allowed_pattern)
     else:
-        suffix_pattern = r'\.(?P<%s>[a-z0-9]+)$' % suffix_kwarg
+        suffix_pattern = r'\.(?P<%s>[a-z0-9]+)/?$' % suffix_kwarg
 
     return apply_suffix_patterns(urlpatterns, suffix_pattern, suffix_required)

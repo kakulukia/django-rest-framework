@@ -19,9 +19,12 @@ automatically.
 from __future__ import unicode_literals
 
 from functools import update_wrapper
+
 from django.utils.decorators import classonlymethod
 from django.views.decorators.csrf import csrf_exempt
-from rest_framework import views, generics, mixins
+
+from rest_framework import generics, mixins, views
+from rest_framework.reverse import reverse
 
 
 class ViewSetMixin(object):
@@ -44,9 +47,19 @@ class ViewSetMixin(object):
         instantiated view, we need to totally reimplement `.as_view`,
         and slightly modify the view function that is created and returned.
         """
-        # The suffix initkwarg is reserved for identifing the viewset type
+        # The suffix initkwarg is reserved for displaying the viewset type.
         # eg. 'List' or 'Instance'.
         cls.suffix = None
+
+        # Setting a basename allows a view to reverse its action urls. This
+        # value is provided by the router through the initkwargs.
+        cls.basename = None
+
+        # actions must not be empty
+        if not actions:
+            raise TypeError("The `actions` argument must be provided when "
+                            "calling `.as_view()` on a ViewSet. For example "
+                            "`.as_view({'get': 'list'})`")
 
         # sanitize keyword arguments
         for key in initkwargs:
@@ -71,9 +84,12 @@ class ViewSetMixin(object):
                 handler = getattr(self, action)
                 setattr(self, method, handler)
 
-            # Patch this in as it's otherwise only present from 1.5 onwards
             if hasattr(self, 'get') and not hasattr(self, 'head'):
                 self.head = self.get
+
+            self.request = request
+            self.args = args
+            self.kwargs = kwargs
 
             # And continue as usual
             return self.dispatch(request, *args, **kwargs)
@@ -89,17 +105,35 @@ class ViewSetMixin(object):
         # generation can pick out these bits of information from a
         # resolved URL.
         view.cls = cls
+        view.initkwargs = initkwargs
         view.suffix = initkwargs.get('suffix', None)
+        view.actions = actions
         return csrf_exempt(view)
 
-    def initialize_request(self, request, *args, **kargs):
+    def initialize_request(self, request, *args, **kwargs):
         """
         Set the `.action` attribute on the view,
         depending on the request method.
         """
-        request = super(ViewSetMixin, self).initialize_request(request, *args, **kargs)
-        self.action = self.action_map.get(request.method.lower())
+        request = super(ViewSetMixin, self).initialize_request(request, *args, **kwargs)
+        method = request.method.lower()
+        if method == 'options':
+            # This is a special case as we always provide handling for the
+            # options method in the base `View` class.
+            # Unlike the other explicitly defined actions, 'metadata' is implicit.
+            self.action = 'metadata'
+        else:
+            self.action = self.action_map.get(method)
         return request
+
+    def reverse_action(self, url_name, *args, **kwargs):
+        """
+        Reverse the action for the given `url_name`.
+        """
+        url_name = '%s-%s' % (self.basename, url_name)
+        kwargs.setdefault('request', self.request)
+
+        return reverse(url_name, *args, **kwargs)
 
 
 class ViewSet(ViewSetMixin, views.APIView):

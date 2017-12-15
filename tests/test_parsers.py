@@ -1,15 +1,23 @@
 # -*- coding: utf-8 -*-
-
 from __future__ import unicode_literals
-from rest_framework.compat import StringIO
+
+import math
+
+import pytest
 from django import forms
-from django.core.files.uploadhandler import MemoryFileUploadHandler
+from django.core.files.uploadhandler import (
+    MemoryFileUploadHandler, TemporaryFileUploadHandler
+)
+from django.http.request import RawPostDataException
 from django.test import TestCase
-from django.utils import unittest
-from rest_framework.compat import etree
-from rest_framework.parsers import FormParser, FileUploadParser
-from rest_framework.parsers import XMLParser
-import datetime
+from django.utils.six import BytesIO, StringIO
+
+from rest_framework.exceptions import ParseError
+from rest_framework.parsers import (
+    FileUploadParser, FormParser, JSONParser, MultiPartParser
+)
+from rest_framework.request import Request
+from rest_framework.test import APIRequestFactory
 
 
 class Form(forms.Form):
@@ -28,70 +36,13 @@ class TestFormParser(TestCase):
         stream = StringIO(self.string)
         data = parser.parse(stream)
 
-        self.assertEqual(Form(data).is_valid(), True)
-
-
-class TestXMLParser(TestCase):
-    def setUp(self):
-        self._input = StringIO(
-            '<?xml version="1.0" encoding="utf-8"?>'
-            '<root>'
-            '<field_a>121.0</field_a>'
-            '<field_b>dasd</field_b>'
-            '<field_c></field_c>'
-            '<field_d>2011-12-25 12:45:00</field_d>'
-            '</root>'
-        )
-        self._data = {
-            'field_a': 121,
-            'field_b': 'dasd',
-            'field_c': None,
-            'field_d': datetime.datetime(2011, 12, 25, 12, 45, 00)
-        }
-        self._complex_data_input = StringIO(
-            '<?xml version="1.0" encoding="utf-8"?>'
-            '<root>'
-            '<creation_date>2011-12-25 12:45:00</creation_date>'
-            '<sub_data_list>'
-            '<list-item><sub_id>1</sub_id><sub_name>first</sub_name></list-item>'
-            '<list-item><sub_id>2</sub_id><sub_name>second</sub_name></list-item>'
-            '</sub_data_list>'
-            '<name>name</name>'
-            '</root>'
-        )
-        self._complex_data = {
-            "creation_date": datetime.datetime(2011, 12, 25, 12, 45, 00),
-            "name": "name",
-            "sub_data_list": [
-                {
-                    "sub_id": 1,
-                    "sub_name": "first"
-                },
-                {
-                    "sub_id": 2,
-                    "sub_name": "second"
-                }
-            ]
-        }
-
-    @unittest.skipUnless(etree, 'defusedxml not installed')
-    def test_parse(self):
-        parser = XMLParser()
-        data = parser.parse(self._input)
-        self.assertEqual(data, self._data)
-
-    @unittest.skipUnless(etree, 'defusedxml not installed')
-    def test_complex_data_parse(self):
-        parser = XMLParser()
-        data = parser.parse(self._complex_data_input)
-        self.assertEqual(data, self._complex_data)
+        assert Form(data).is_valid() is True
 
 
 class TestFileUploadParser(TestCase):
     def setUp(self):
         class MockRequest(object):
             pass
-        from io import BytesIO
         self.stream = BytesIO(
             "Test text file".encode('utf-8')
         )
@@ -104,36 +55,129 @@ class TestFileUploadParser(TestCase):
         self.parser_context = {'request': request, 'kwargs': {}}
 
     def test_parse(self):
-        """ Make sure the `QueryDict` works OK """
+        """
+        Parse raw file upload.
+        """
         parser = FileUploadParser()
         self.stream.seek(0)
         data_and_files = parser.parse(self.stream, None, self.parser_context)
         file_obj = data_and_files.files['file']
-        self.assertEqual(file_obj._size, 14)
+        assert file_obj._size == 14
+
+    def test_parse_missing_filename(self):
+        """
+        Parse raw file upload when filename is missing.
+        """
+        parser = FileUploadParser()
+        self.stream.seek(0)
+        self.parser_context['request'].META['HTTP_CONTENT_DISPOSITION'] = ''
+        with pytest.raises(ParseError) as excinfo:
+            parser.parse(self.stream, None, self.parser_context)
+        assert str(excinfo.value) == 'Missing filename. Request should include a Content-Disposition header with a filename parameter.'
+
+    def test_parse_missing_filename_multiple_upload_handlers(self):
+        """
+        Parse raw file upload with multiple handlers when filename is missing.
+        Regression test for #2109.
+        """
+        parser = FileUploadParser()
+        self.stream.seek(0)
+        self.parser_context['request'].upload_handlers = (
+            MemoryFileUploadHandler(),
+            MemoryFileUploadHandler()
+        )
+        self.parser_context['request'].META['HTTP_CONTENT_DISPOSITION'] = ''
+        with pytest.raises(ParseError) as excinfo:
+            parser.parse(self.stream, None, self.parser_context)
+        assert str(excinfo.value) == 'Missing filename. Request should include a Content-Disposition header with a filename parameter.'
+
+    def test_parse_missing_filename_large_file(self):
+        """
+        Parse raw file upload when filename is missing with TemporaryFileUploadHandler.
+        """
+        parser = FileUploadParser()
+        self.stream.seek(0)
+        self.parser_context['request'].upload_handlers = (
+            TemporaryFileUploadHandler(),
+        )
+        self.parser_context['request'].META['HTTP_CONTENT_DISPOSITION'] = ''
+        with pytest.raises(ParseError) as excinfo:
+            parser.parse(self.stream, None, self.parser_context)
+        assert str(excinfo.value) == 'Missing filename. Request should include a Content-Disposition header with a filename parameter.'
 
     def test_get_filename(self):
         parser = FileUploadParser()
         filename = parser.get_filename(self.stream, None, self.parser_context)
-        self.assertEqual(filename, 'file.txt')
+        assert filename == 'file.txt'
 
     def test_get_encoded_filename(self):
         parser = FileUploadParser()
 
         self.__replace_content_disposition('inline; filename*=utf-8\'\'ÀĥƦ.txt')
         filename = parser.get_filename(self.stream, None, self.parser_context)
-        self.assertEqual(filename, 'ÀĥƦ.txt')
+        assert filename == 'ÀĥƦ.txt'
 
         self.__replace_content_disposition('inline; filename=fallback.txt; filename*=utf-8\'\'ÀĥƦ.txt')
         filename = parser.get_filename(self.stream, None, self.parser_context)
-        self.assertEqual(filename, 'ÀĥƦ.txt')
+        assert filename == 'ÀĥƦ.txt'
 
         self.__replace_content_disposition('inline; filename=fallback.txt; filename*=utf-8\'en-us\'ÀĥƦ.txt')
         filename = parser.get_filename(self.stream, None, self.parser_context)
-        self.assertEqual(filename, 'ÀĥƦ.txt')
-
-        self.__replace_content_disposition('inline; filename=fallback.txt; filename*=utf-8--ÀĥƦ.txt')
-        filename = parser.get_filename(self.stream, None, self.parser_context)
-        self.assertEqual(filename, 'fallback.txt')
+        assert filename == 'ÀĥƦ.txt'
 
     def __replace_content_disposition(self, disposition):
         self.parser_context['request'].META['HTTP_CONTENT_DISPOSITION'] = disposition
+
+
+class TestJSONParser(TestCase):
+    def bytes(self, value):
+        return BytesIO(value.encode('utf-8'))
+
+    def test_float_strictness(self):
+        parser = JSONParser()
+
+        # Default to strict
+        for value in ['Infinity', '-Infinity', 'NaN']:
+            with pytest.raises(ParseError):
+                parser.parse(self.bytes(value))
+
+        parser.strict = False
+        assert parser.parse(self.bytes('Infinity')) == float('inf')
+        assert parser.parse(self.bytes('-Infinity')) == float('-inf')
+        assert math.isnan(parser.parse(self.bytes('NaN')))
+
+
+class TestPOSTAccessed(TestCase):
+    def setUp(self):
+        self.factory = APIRequestFactory()
+
+    def test_post_accessed_in_post_method(self):
+        django_request = self.factory.post('/', {'foo': 'bar'})
+        request = Request(django_request, parsers=[FormParser(), MultiPartParser()])
+        django_request.POST
+        assert request.POST == {'foo': ['bar']}
+        assert request.data == {'foo': ['bar']}
+
+    def test_post_accessed_in_post_method_with_json_parser(self):
+        django_request = self.factory.post('/', {'foo': 'bar'})
+        request = Request(django_request, parsers=[JSONParser()])
+        django_request.POST
+        assert request.POST == {}
+        assert request.data == {}
+
+    def test_post_accessed_in_put_method(self):
+        django_request = self.factory.put('/', {'foo': 'bar'})
+        request = Request(django_request, parsers=[FormParser(), MultiPartParser()])
+        django_request.POST
+        assert request.POST == {'foo': ['bar']}
+        assert request.data == {'foo': ['bar']}
+
+    def test_request_read_before_parsing(self):
+        django_request = self.factory.put('/', {'foo': 'bar'})
+        request = Request(django_request, parsers=[FormParser(), MultiPartParser()])
+        django_request.read()
+        with pytest.raises(RawPostDataException):
+            request.POST
+        with pytest.raises(RawPostDataException):
+            request.POST
+            request.data
